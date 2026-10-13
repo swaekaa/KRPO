@@ -1,0 +1,27 @@
+{
+  "name": "krpo",
+  "version": "1.0.0",
+  "description": "KLUSTOR Racing Policy Optimizer — trajectory and driving policy optimization for Vice Coast Circuit",
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "test": "node --loader ts-node/esm tests/run_tests.ts",
+    "optimize": "node --loader ts-node/esm src/generate_profiles.ts"
+  },
+  "keywords": [
+    "racing-line",
+    "trajectory-optimization",
+    "reinforcement-learning",
+    "klustor",
+    "physics"
+  ],
+  "author": "KRPO Team",
+  "license": "MIT",
+  "dependencies": {
+    "three": "^0.186.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.185.4",
+    "typescript": "^5.5.0"
+  }
+}

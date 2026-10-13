@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "KRPO Racing Line Profile Schema",
+  "description": "Standardized schema for optimized racing line profiles produced by KRPO",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "optimizerVersion",
+    "circuitId",
+    "trackGeometryHash",
+    "generatedAt",
+    "vehicleConfig",
+    "metrics",
+    "waypoints"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "string" },
+    "optimizerVersion": { "type": "string" },
+    "circuitId": { "type": "string" },
+    "trackGeometryHash": { "type": "string" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "vehicleConfig": {
+      "type": "object",
+      "required": ["topSpeed", "acceleration", "braking", "steeringStrength", "friction", "carHalfWidth"],
+      "properties": {
+        "topSpeed": { "type": "number" },
+        "acceleration": { "type": "number" },
+        "braking": { "type": "number" },
+        "steeringStrength": { "type": "number" },
+        "friction": { "type": "number" },
+        "carHalfWidth": { "type": "number" }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "required": [
+        "simulatedLapTime",
+        "baselineLapTime",
+        "timeDelta",
+        "percentageImprovement",
+        "averageSpeedKmh",
+        "maxSpeedKmh",
+        "racingLineLength",
+        "centerlineLength",
+        "isBoundaryCompliant",
+        "maxLateralOffset"
+      ]
+    },
+    "waypoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "index",
+          "arcLength",
+          "position",
+          "tangent",
+          "normal",
+          "lateralOffset",
+          "curvature",
+          "targetSpeed",
+          "targetSpeedKmh",
+          "throttle",
+          "brake",
+          "isBrakingPoint",
+          "isApex",
+          "sector"
+        ],
+        "properties": {
+          "index": { "type": "integer" },
+          "arcLength": { "type": "number" },
+          "position": {
+            "type": "object",
+            "required": ["x", "y", "z"],
+            "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "z": { "type": "number" } }
+          },
+          "lateralOffset": { "type": "number" },
+          "curvature": { "type": "number" },
+          "targetSpeed": { "type": "number" },
+          "targetSpeedKmh": { "type": "number" },
+          "throttle": { "type": "number", "minimum": 0, "maximum": 1 },
+          "brake": { "type": "number", "minimum": 0, "maximum": 1 },
+          "isBrakingPoint": { "type": "boolean" },
+          "isApex": { "type": "boolean" },
+          "sector": { "type": "integer" }
+        }
+      }
+    }
+  }
+}

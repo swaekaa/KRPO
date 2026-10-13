@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "KRPO Track Schema",
+  "description": "Standardized track geometry export schema extracted from KLUSTOR",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "circuitId",
+    "geometryHash",
+    "roadWidth",
+    "carHalfWidth",
+    "maxLegalOffset",
+    "totalLength",
+    "totalSamples",
+    "samples",
+    "checkpoints"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "string" },
+    "circuitId": { "type": "string" },
+    "circuitName": { "type": "string" },
+    "geometryHash": { "type": "string" },
+    "roadWidth": { "type": "number", "minimum": 1 },
+    "carHalfWidth": { "type": "number", "minimum": 0.1 },
+    "maxLegalOffset": { "type": "number", "minimum": 0 },
+    "safetyMargin": { "type": "number" },
+    "totalLength": { "type": "number", "minimum": 0 },
+    "totalSamples": { "type": "integer", "minimum": 10 },
+    "samples": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index", "position", "tangent", "normal", "leftEdge", "rightEdge", "curvature", "arcLength"],
+        "properties": {
+          "index": { "type": "integer" },
+          "position": {
+            "type": "object",
+            "required": ["x", "y", "z"],
+            "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "z": { "type": "number" } }
+          },
+          "tangent": {
+            "type": "object",
+            "required": ["x", "y", "z"],
+            "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "z": { "type": "number" } }
+          },
+          "normal": {
+            "type": "object",
+            "required": ["x", "y", "z"],
+            "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "z": { "type": "number" } }
+          },
+          "curvature": { "type": "number" },
+          "arcLength": { "type": "number" }
+        }
+      }
+    },
+    "checkpoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "index", "position", "tangent", "normal"],
+        "properties": {
+          "id": { "type": "string" },
+          "index": { "type": "integer" },
+          "position": {
+            "type": "object",
+            "required": ["x", "y", "z"],
+            "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "z": { "type": "number" } }
+          }
+        }
+      }
+    }
+  }
+}

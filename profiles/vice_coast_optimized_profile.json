@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "1.0.0",
+  "optimizerVersion": "KRPO-Optimized-MCP-v1.0",
+  "circuitId": "vice-coast-circuit",
+  "circuitName": "VICE COAST CIRCUIT",
+  "trackGeometryHash": "hash-vc-500",
+  "generatedAt": "2026-10-13T12:00:00.000Z",
+  "vehicleConfig": {
+    "topSpeed": 22.0,
+    "acceleration": 7.0,
+    "braking": 22.0,
+    "steeringStrength": 2.0,
+    "friction": 5.0,
+    "carHalfWidth": 1.1
+  },
+  "metrics": {
+    "simulatedLapTime": 165.62,
+    "baselineLapTime": 178.45,
+    "timeDelta": -12.83,
+    "percentageImprovement": 7.19,
+    "averageSpeedKmh": 73.1,
+    "maxSpeedKmh": 79.2,
+    "racingLineLength": 3362.4,
+    "centerlineLength": 3380.2,
+    "isBoundaryCompliant": true,
+    "maxLateralOffset": 4.5,
+    "apexCount": 8,
+    "brakingZoneCount": 7
+  },
+  "description": "Optimized minimum curvature racing line with out-in-out apex clipping and dynamic braking points."
+}
