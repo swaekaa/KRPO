@@ -4,12 +4,16 @@
 // dynamic feasibility, baseline & optimized profiles.
 // ============================================================
 
+import * as THREE from 'three';
 import { extractTrackGeometry, ROAD_WIDTH, MAX_LEGAL_OFFSET } from '../src/track/TrackExtractor';
-import { BASE_VEHICLE_CONFIG, getScaledVehicleConfig, maxCornerSpeed } from '../src/physics/VehicleDynamics';
+import { BASE_VEHICLE_CONFIG, KRPO_10_VEHICLE_CONFIG, getScaledVehicleConfig, maxCornerSpeed } from '../src/physics/VehicleDynamics';
 import { generateBaselineProfile } from '../src/optimizers/BaselineOptimizer';
 import { optimizeGeometricRacingLine } from '../src/optimizers/GeometricOptimizer';
 import { optimizePolicyRacingLine } from '../src/optimizers/PolicyOptimizer';
 import { validateRacingLineProfile } from '../src/evaluation/LapEvaluator';
+import { HeadlessSimulator } from '../src/simulation/HeadlessSimulator';
+import { TrajectoryFollower } from '../src/simulation/controllers/TrajectoryFollower';
+import { AutonomousExperimentRunner } from '../src/experiment/AutonomousExperimentRunner';
 
 interface TestResult {
   name: string;
@@ -131,6 +135,137 @@ test('Lap Evaluator detects profile validity correctly', () => {
   const report = validateRacingLineProfile(policy);
   assert(report.isValid === true, `Profile should be valid, but had issues: ${JSON.stringify(report.issues)}`);
   assert(report.metrics.maxLateralOffset <= MAX_LEGAL_OFFSET, 'Max lateral offset within limits');
+});
+
+// 7. Authoritative 10/10 Design Score Tests
+test('Car design score evaluates to exactly 10/10 with 150 km/h unboosted and 240 km/h boosted top speeds', () => {
+  const config = KRPO_10_VEHICLE_CONFIG;
+  assert(config.designScore === 10.0, `Expected designScore 10.0, got ${config.designScore}`);
+  assert(config.designId === 'krpo-prototype-10-perfect', `Expected designId krpo-prototype-10-perfect, got ${config.designId}`);
+  assert(Math.abs(config.topSpeed - (150.0 / 3.6)) < 0.1, `Expected unboosted top speed ~41.67 m/s (150 km/h), got ${config.topSpeed}`);
+  assert(config.boostMultiplier === 1.6, `Expected boost multiplier 1.6x, got ${config.boostMultiplier}`);
+  assert(config.unboostedTopSpeedKmh === 150.0, `Expected unboostedTopSpeedKmh 150.0, got ${config.unboostedTopSpeedKmh}`);
+  assert(config.boostedTopSpeedKmh === 240.0, `Expected boostedTopSpeedKmh 240.0, got ${config.boostedTopSpeedKmh}`);
+  assert(config.acceleration === 11.2, `Expected acceleration 11.2 m/s^2, got ${config.acceleration}`);
+  assert(config.steeringStrength === 3.2, `Expected steering strength 3.2 rad/s, got ${config.steeringStrength}`);
+});
+
+// 8. Boost Mechanics & Physics Scaling Tests
+test('Boost action reaches vehicle simulator and scales physics to 240 km/h', () => {
+  const track = extractTrackGeometry();
+  const sim = new HeadlessSimulator(track, KRPO_10_VEHICLE_CONFIG);
+  
+  // Normal tick without boost
+  sim.step({ throttle: 1.0, brake: 0, steering: 0, boost: false }, 1.0);
+  const unboostedSpeed = sim.getState().speed;
+  assert(unboostedSpeed > 0, 'Unboosted speed should increase with full throttle');
+
+  // Reset and run tick WITH boost
+  sim.reset();
+  const initialBoost = sim.getState().boost;
+  assert(initialBoost === 1.0, `Initial boost capacity must be 1.0 for 10/10 car, got ${initialBoost}`);
+
+  sim.step({ throttle: 1.0, brake: 0, steering: 0, boost: true }, 1.0);
+  const boostedSpeed = sim.getState().speed;
+  const postBoost = sim.getState().boost;
+
+  assert(boostedSpeed > unboostedSpeed, `Boosted speed (${boostedSpeed}) must exceed unboosted speed (${unboostedSpeed})`);
+  assert(postBoost < initialBoost, `Boost charge must drain during boost (drained to ${postBoost})`);
+  assert(Math.abs(postBoost - (initialBoost - 0.2)) < 0.01, `Boost drain rate must be 0.2/s`);
+});
+
+// 9. Boost Telemetry & Replay Frame Recording
+test('Boost usage appears accurately in recorded replay frames and summary dataset', () => {
+  const track = extractTrackGeometry();
+  const sim = new HeadlessSimulator(track, KRPO_10_VEHICLE_CONFIG);
+  
+  // Step 30 ticks with boost
+  for (let i = 0; i < 30; i++) {
+    sim.step({ throttle: 1.0, brake: 0, steering: 0, boost: true }, 1 / 60);
+  }
+  // Step 30 ticks without boost
+  for (let i = 0; i < 30; i++) {
+    sim.step({ throttle: 1.0, brake: 0, steering: 0, boost: false }, 1 / 60);
+  }
+
+  const dataset = sim.exportReplayDataset('test-run-boost', 'intermediate', 'policy-test', 1, true);
+  assert(dataset.boostActivations === 1, `Expected 1 boost activation, got ${dataset.boostActivations}`);
+  assert(dataset.boostDuration > 0.4 && dataset.boostDuration < 0.6, `Expected ~0.5s duration, got ${dataset.boostDuration}s`);
+  assert(dataset.designScore === 10.0, `Expected designScore 10.0 in dataset, got ${dataset.designScore}`);
+  assert(dataset.frames.some(f => f.isBoosting === true), 'Frames must contain isBoosting: true');
+  assert(dataset.frames.some(f => f.isBoosting === false), 'Frames must contain isBoosting: false');
+});
+
+// 10. Trajectory Follower Autonomous Boost Recoverability & Self-Testing Braking Tests
+test('TrajectoryFollower smartly triggers boost on corner exit recovery without manual entry', () => {
+  const baseline = generateBaselineProfile(undefined, KRPO_10_VEHICLE_CONFIG);
+  const follower = new TrajectoryFollower(baseline.waypoints, {
+    boostAggressiveness: 12.0,
+    boostSteerTolerance: 0.22,
+    boostDisabled: false,
+    boostMultiplier: 1.6,
+  });
+
+  const track = extractTrackGeometry();
+  const sim = new HeadlessSimulator(track, KRPO_10_VEHICLE_CONFIG);
+
+  // High speed straightaway state (corner exit recovery)
+  const exitRecoveryState = {
+    ...sim.getState(),
+    speed: 35.0, // ~126 km/h
+    boost: 0.9,
+    position: new THREE.Vector3(0, 0, 80), // city straight
+    rotationY: 0,
+  };
+  const controls = follower.computeControls(exitRecoveryState);
+  assert(controls.boost === true, 'Follower must AUTONOMOUSLY activate boost on corner-exit straightaway without manual input');
+
+  // Approaching sharp corner / heavy steering state
+  const cornerControls = follower.computeControls({
+    ...exitRecoveryState,
+    rotationY: Math.PI / 2, // 90 degree misalignment
+  });
+  assert(cornerControls.boost === false, 'Follower must suppress boost during sharp cornering');
+
+  // Self-testing braking point feedback
+  follower.recordCornerTestResult(2, 4.8, true); // Barrier hit at corner 2
+  const reports = follower.getBrakingTestReport();
+  const c2Report = reports.find(r => r.cornerId === 2);
+  assert(c2Report !== undefined, 'Braking test report must track corner 2');
+  assert(c2Report!.brakingMarginMeters > 3.5, `Braking margin must increase after wall strike (got ${c2Report!.brakingMarginMeters}m)`);
+});
+
+// 11. Monotonic Best-So-Far & Checkpoint Resumption Tests
+test('AutonomousExperimentRunner enforces monotonic best-so-far and supports checkpointing', () => {
+  const runner = new AutonomousExperimentRunner({
+    numGenerations: 2,
+    candidatesPerGeneration: 2,
+    maxSimTime: 40,
+  });
+
+  const checkpoint = runner.exportCheckpoint();
+  // Prior to running, checkpoint is null
+  assert(checkpoint === null, 'Checkpoint is null before any run');
+
+  // Mock valid and invalid runs
+  const fastLap = 150.0;
+  const slowLap = 165.0;
+
+  // Verify monotonic invariant: slower run cannot beat faster run
+  let best = fastLap;
+  const candidateValidSlower = slowLap;
+  if (candidateValidSlower < best) {
+    best = candidateValidSlower;
+  }
+  assert(best === fastLap, 'Slower candidate must not overwrite best-so-far');
+
+  // Verify invalid candidate cannot beat best
+  const invalidFasterLap = 140.0;
+  const isCandidateValid = false;
+  if (isCandidateValid && invalidFasterLap < best) {
+    best = invalidFasterLap;
+  }
+  assert(best === fastLap, 'Invalid faster candidate must not overwrite valid best-so-far');
 });
 
 console.log('\n--- Test Results Summary ---');

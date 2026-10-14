@@ -136,6 +136,23 @@ export function computeSpeedProfile(
     if (isApex) apexCount++;
     if (isBrakingPoint && !waypoints[(i - 1 + n) % n]?.isBrakingPoint) brakingZoneCount++;
 
+    // Straightaway boost zone detection (low curvature with >= 35m clear straight)
+    let isBoostZone = false;
+    if (absKappa < 0.003 && !isBrakingPoint) {
+      let lookDist = 0;
+      let clearAhead = true;
+      for (let look = 1; look <= 15; look++) {
+        const checkIdx = (i + look) % n;
+        lookDist += ds[checkIdx];
+        if (Math.abs(pathPoints[checkIdx].curvature) > 0.012 || vProfile[checkIdx] < v * 0.8) {
+          clearAhead = false;
+          break;
+        }
+        if (lookDist >= 35.0) break;
+      }
+      isBoostZone = clearAhead && lookDist >= 30.0;
+    }
+
     waypoints[i] = {
       index: i,
       arcLength,
@@ -150,6 +167,7 @@ export function computeSpeedProfile(
       brake: Math.round(brake * 100) / 100,
       isBrakingPoint,
       isApex,
+      isBoostZone,
       sector: pt.sector,
     };
 

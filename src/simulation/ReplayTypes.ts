@@ -20,6 +20,7 @@ export interface ReplayFrame {
   throttle: number;      // 0.0 to 1.0
   brake: number;         // 0.0 to 1.0
   isBoosting: boolean;
+  boostReserve?: number; // 0.0 to 1.0
   checkpointIndex: number;
   lapProgress: number;   // 0.0 to 1.0
   lateralOffset: number; // meters from centerline (-left, +right)
@@ -42,6 +43,11 @@ export interface ReplayDataset {
   topSpeedKmh: number;
   collisionCount: number;
   totalDistance: number;    // meters
+  designScore: number;      // 10.0 verified
+  designId?: string;
+  boostActivations: number; // total times boost was triggered
+  boostDuration: number;    // seconds spent boosting
+  maxBoostSpeedKmh: number; // top speed attained while boosting
   frames: ReplayFrame[];
 }
 
@@ -72,5 +78,10 @@ export interface ExperimentSummary {
     isValid: boolean;
     avgSpeedKmh: number;
     collisionCount: number;
+    designScore?: number;
+    designId?: string;
+    boostActivations?: number;
+    boostDuration?: number;
+    maxBoostSpeedKmh?: number;
   }[];
 }

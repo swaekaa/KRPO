@@ -15,3 +15,7 @@ export * from './simulation/ReplayTypes';
 export * from './simulation/HeadlessSimulator';
 export * from './simulation/controllers/TrajectoryFollower';
 export * from './experiment/AutonomousExperimentRunner';
+export * from './design/krpoAuthoritativeDesign';
+export * from './leaderboard/krpoLeaderboardStore';
+export * from './simulation/krpoLiveLearning';
+export * from './simulation/krpoReplayStore';

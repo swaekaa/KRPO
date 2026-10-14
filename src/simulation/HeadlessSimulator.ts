@@ -51,11 +51,12 @@ export class HeadlessSimulator {
       0,
       this.trackData.startTransform.position.z
     );
+    const maxBoost = Math.max(0, Math.min(1.0, (this.vehicle.designScore ?? 10.0) / 10.0));
     return {
       position: startPos,
       rotationY: this.trackData.startTransform.rotation,
       speed: 0,
-      boost: 1.0,
+      boost: maxBoost,
       currentCheckpoint: 0,
       lapCompleted: false,
       simTime: 0,
@@ -135,17 +136,17 @@ export class HeadlessSimulator {
 
     this.prevPosition = this.state.position.clone();
 
-    // 1. Boost Logic
+    // 1. Boost Logic — Capacity directly governed by designScore (10/10 => 100%)
     let isBoosting = false;
-    const maxBoost = 1.0;
-    if (input.boost && this.state.boost > 0.01) {
+    const maxBoost = Math.max(0, Math.min(1.0, (this.vehicle.designScore ?? 10.0) / 10.0));
+    if (input.boost && this.state.boost > 0.01 && maxBoost > 0) {
       this.state.boost = Math.max(0, this.state.boost - 0.2 * dt);
       isBoosting = true;
     } else if (!input.boost) {
       this.state.boost = Math.min(maxBoost, this.state.boost + 0.1 * dt);
     }
 
-    const boostMult = isBoosting ? 1.5 : 1.0;
+    const boostMult = isBoosting ? (this.vehicle.boostMultiplier ?? 1.6) : 1.0;
     const currentMaxSpeed = this.vehicle.topSpeed * boostMult;
     const currentAccel = this.vehicle.acceleration * boostMult;
 
@@ -274,6 +275,7 @@ export class HeadlessSimulator {
       throttle: Math.round(input.throttle * 100) / 100,
       brake: Math.round(input.brake * 100) / 100,
       isBoosting,
+      boostReserve: Math.round(this.state.boost * 100) / 100,
       checkpointIndex: this.state.currentCheckpoint,
       lapProgress: Math.round(lapProgress * 1000) / 1000,
       lateralOffset: Math.round(this.state.lateralOffset * 100) / 100,
@@ -299,9 +301,22 @@ export class HeadlessSimulator {
 
     let topSpeed = 0;
     let speedSum = 0;
+    let boostActivations = 0;
+    let boostDuration = 0;
+    let maxBoostSpeedKmh = 0;
+    let wasBoosting = false;
+
     for (const f of this.recordedFrames) {
       if (f.speedKmh > topSpeed) topSpeed = f.speedKmh;
       speedSum += f.speedKmh;
+      if (f.isBoosting) {
+        boostDuration += (1 / 60);
+        if (f.speedKmh > maxBoostSpeedKmh) maxBoostSpeedKmh = f.speedKmh;
+        if (!wasBoosting) {
+          boostActivations++;
+        }
+      }
+      wasBoosting = f.isBoosting;
     }
     const avgSpeed = this.recordedFrames.length > 0 ? speedSum / this.recordedFrames.length : 0;
 
@@ -321,6 +336,11 @@ export class HeadlessSimulator {
       topSpeedKmh: Math.round(topSpeed * 10) / 10,
       collisionCount: this.state.collisionCount,
       totalDistance: Math.round(this.state.totalDistance * 10) / 10,
+      designScore: this.vehicle.designScore ?? 10.0,
+      designId: this.vehicle.designId ?? 'krpo-prototype-10-perfect',
+      boostActivations,
+      boostDuration: Math.round(boostDuration * 100) / 100,
+      maxBoostSpeedKmh: Math.round(maxBoostSpeedKmh * 10) / 10,
       frames: [...this.recordedFrames],
     };
   }

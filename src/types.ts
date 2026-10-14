@@ -57,6 +57,32 @@ export interface VehicleParameters {
   friction: number;        // m/s^2
   carHalfWidth: number;    // m
   designScore?: number;
+  designId?: string;
+  boostMultiplier?: number;      // e.g. 1.6 for 10/10 car (150 km/h -> 240 km/h)
+  maxBoostCapacity?: number;     // 0.0 to 1.0 (100% for 10/10 car)
+  unboostedTopSpeedKmh?: number; // 150 km/h for 10/10 car
+  boostedTopSpeedKmh?: number;   // 240 km/h for 10/10 car
+}
+
+export type TemplateView = 'left' | 'right' | 'front' | 'rear' | 'top';
+
+export interface CarStats {
+  topSpeed: number;       // 100–200 (km/h scale)
+  acceleration: number;  // 1–10
+  handling: number;      // 1–10
+  designScore: number;   // 0–10
+  overallRating: number; // computed weighted average
+  symmetry?: number;
+  contrast?: number;
+  variety?: number;
+  complexity?: number;
+}
+
+export interface LiveryData {
+  name: string;
+  textures: Partial<Record<TemplateView, string>>;
+  stats: CarStats;
+  createdAt: string;
 }
 
 export interface RacingLineWaypoint {
@@ -73,6 +99,7 @@ export interface RacingLineWaypoint {
   brake: number;           // 0 to 1
   isBrakingPoint: boolean;
   isApex: boolean;
+  isBoostZone?: boolean;
   cornerId?: number;
   sector: number;
 }
