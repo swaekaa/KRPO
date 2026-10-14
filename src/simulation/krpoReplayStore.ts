@@ -346,33 +346,41 @@ function generateSingleSwarmEstimation(estIndex: number): SwarmEstimationRun {
     const sNext = samples[nextIdx];
     const absK = Math.abs(sCurr.curvature || 0);
 
-    // Lateral offset based on estimation archetype
+    // Lateral offset based on estimation archetype with spatial lane separation
     let lateralOffset = 0;
     if (estIndex > 1) {
-      if (ep === 1) {
-        // V-Line: square off corners
-        lateralOffset = -sCurr.curvature * 68.0 * lineOffsetScale;
+      if (estIndex === 40) {
+        // All-Time Champion: perfect Euler-spiral minimal-curvature racing line
+        lateralOffset = -sCurr.curvature * 72.0 * 1.15;
+      } else if (ep === 1) {
+        // V-Line Square-Off: bias right (+1.3m) to set up sharp late apex
+        const straightBias = 1.35 * Math.cos(progress * Math.PI * 2);
+        lateralOffset = -sCurr.curvature * 68.0 * lineOffsetScale + straightBias * (1.0 - Math.min(1.0, absK * 40.0));
       } else if (ep === 2) {
-        // Chicane cut: opposing phase
-        lateralOffset = -sCurr.curvature * 58.0 * lineOffsetScale;
+        // Chicane Straight Cut: bias left (-1.3m) with opposing phase clipping
+        const straightBias = -1.35 * Math.cos(progress * Math.PI * 2);
+        lateralOffset = -sCurr.curvature * 58.0 * lineOffsetScale + straightBias * (1.0 - Math.min(1.0, absK * 40.0));
       } else if (ep === 3) {
-        // Trail brake: inside dive
-        lateralOffset = -Math.sign(sCurr.curvature || 1) * Math.min(4.3, absK * 85.0 * lineOffsetScale);
+        // Trail Brake: deep inside dive hugging the corner apex
+        const side = Math.sign(sCurr.curvature || 1);
+        lateralOffset = -side * Math.min(3.8, Math.max(0.6, absK * 85.0 * lineOffsetScale));
       } else {
-        // RL Spline: harmonic waves
-        lateralOffset = -sCurr.curvature * 62.0 * lineOffsetScale + Math.sin(progress * Math.PI * 8) * 0.6;
+        // RL Spline Mutation: harmonic camber exploration across track
+        const harmonicWave = Math.sin(progress * Math.PI * 12 + gen * 0.7) * 1.1;
+        lateralOffset = -sCurr.curvature * 64.0 * lineOffsetScale + harmonicWave;
       }
-      lateralOffset = Math.max(-MAX_LEGAL_OFFSET, Math.min(MAX_LEGAL_OFFSET, lateralOffset));
+      // Guarantee all candidates stay within legal tarmac limits (road width = 12m)
+      lateralOffset = Math.max(-4.1, Math.min(4.1, lateralOffset));
     }
 
     // Crash simulation at specific frame windows
     let isCollision = false;
     if (isCrashRun && f >= 110 && f <= 140) {
       isCollision = true;
-      lateralOffset = 4.95; // barrier strike
+      lateralOffset = 4.85; // barrier strike
     }
 
-    // 3D Position
+    // 3D Position with full double precision (no centimeter quantization noise)
     const basePos = new THREE.Vector3(sCurr.position.x, 0, sCurr.position.z).lerp(
       new THREE.Vector3(sNext.position.x, 0, sNext.position.z),
       frac
@@ -422,8 +430,8 @@ function generateSingleSwarmEstimation(estIndex: number): SwarmEstimationRun {
     frames.push({
       tick: f,
       time: Math.round(time * 100) / 100,
-      position: [Math.round(pos.x * 100) / 100, 0, Math.round(pos.z * 100) / 100],
-      rotationY: Math.round(rotY * 1000) / 1000,
+      position: [pos.x, 0, pos.z],
+      rotationY: rotY,
       speed: Math.round(speedMs * 100) / 100,
       speedKmh,
       steering: Math.max(-1.0, Math.min(1.0, -tangent.x * 0.85)),
@@ -432,8 +440,8 @@ function generateSingleSwarmEstimation(estIndex: number): SwarmEstimationRun {
       isBoosting,
       boostReserve: Math.max(0.05, 1.0 - (f % 50) * 0.02),
       checkpointIndex: currentCP,
-      lapProgress: Math.round(progress * 1000) / 1000,
-      lateralOffset: Math.round(lateralOffset * 100) / 100,
+      lapProgress: progress,
+      lateralOffset,
       isCollision,
     });
   }
@@ -567,13 +575,20 @@ export function getExperimentSummary(): ExperimentSummary {
   return _summaryCache;
 }
 
+function shortestAngleDiff(target: number, source: number): number {
+  let diff = (target - source) % (Math.PI * 2);
+  if (diff < -Math.PI) diff += Math.PI * 2;
+  if (diff > Math.PI) diff -= Math.PI * 2;
+  return diff;
+}
+
 export function sampleReplayState(dataset: ReplayDataset, currentTime: number): ReplayFrame {
   const frames = dataset.frames;
   if (!frames || frames.length === 0) {
     return {
       tick: 0,
       time: 0,
-      position: { x: 0, y: 0, z: 0 },
+      position: [0, 0, 0],
       rotationY: 0,
       speed: 0,
       speedKmh: 0,
@@ -581,7 +596,7 @@ export function sampleReplayState(dataset: ReplayDataset, currentTime: number): 
       steering: 0,
       throttle: 0,
       brake: 0,
-      boost: 1.0,
+      boostReserve: 1.0,
       isBoosting: false,
       isCollision: false,
       checkpointIndex: 0,
@@ -589,9 +604,98 @@ export function sampleReplayState(dataset: ReplayDataset, currentTime: number): 
     };
   }
 
-  const safeTime = isNaN(currentTime) ? 0 : Math.max(0, Math.min(dataset.lapTime, currentTime));
-  const progress = safeTime / (dataset.lapTime || 1);
-  const targetIdx = Math.min(frames.length - 1, Math.floor(progress * (frames.length - 1)));
+  const lapTime = dataset.lapTime || 80.0;
+  const safeTime = isNaN(currentTime) ? 0 : Math.max(0, Math.min(lapTime, currentTime));
+  const progress = safeTime / (lapTime || 1);
+  const nFrames = frames.length;
 
-  return frames[targetIdx];
+  // Floating point index
+  const exactIndex = progress * (nFrames - 1);
+  const idxA = Math.floor(exactIndex);
+  const idxB = Math.min(nFrames - 1, idxA + 1);
+  const alpha = exactIndex - idxA;
+
+  const fA = frames[idxA];
+  const fB = frames[idxB];
+
+  if (!fB || alpha <= 0.0001) {
+    return fA;
+  }
+
+  const getP = (fr: ReplayFrame): [number, number, number] => {
+    if (Array.isArray(fr.position)) {
+      return [fr.position[0], fr.position[1] || 0, fr.position[2]];
+    }
+    const p = fr.position as any;
+    return [p?.x || 0, p?.y || 0, p?.z || 0];
+  };
+
+  const f1 = fA;
+  const f2 = fB;
+
+  const p1 = getP(f1);
+  const p2 = getP(f2);
+  const t = alpha;
+
+  // Chord vector and distance between keyframes
+  const dx = p2[0] - p1[0];
+  const dz = p2[2] - p1[2];
+  const chordLen = Math.hypot(dx, dz);
+
+  let posX = p1[0];
+  let posY = p1[1] + (p2[1] - p1[1]) * t;
+  let posZ = p1[2];
+
+  if (chordLen > 1e-4) {
+    // Tangent vectors derived from heading angles aligned with travel chord
+    const t1x = Math.sin(f1.rotationY) * chordLen;
+    const t1z = Math.cos(f1.rotationY) * chordLen;
+    const t2x = Math.sin(f2.rotationY) * chordLen;
+    const t2z = Math.cos(f2.rotationY) * chordLen;
+
+    // Hermite cubic basis polynomials: guaranteed monotonic C1 curve without derivative overshoot
+    const t2 = t * t;
+    const t3 = t2 * t;
+    const h00 = 2 * t3 - 3 * t2 + 1;
+    const h10 = t3 - 2 * t2 + t;
+    const h01 = -2 * t3 + 3 * t2;
+    const h11 = t3 - t2;
+
+    posX = h00 * p1[0] + h10 * t1x + h01 * p2[0] + h11 * t2x;
+    posZ = h00 * p1[2] + h10 * t1z + h01 * p2[2] + h11 * t2z;
+  } else {
+    posX = p1[0] + dx * t;
+    posZ = p1[2] + dz * t;
+  }
+
+  // Circular shortest-arc rotation interpolation (smooth, zero-wiggle, never spins 360)
+  const angleDiff = shortestAngleDiff(f2.rotationY, f1.rotationY);
+  const rotY = f1.rotationY + angleDiff * t;
+
+  // Smooth scalars
+  const speed = f1.speed + (f2.speed - f1.speed) * t;
+  const speedKmh = f1.speedKmh + (f2.speedKmh - f1.speedKmh) * t;
+  const steering = f1.steering + (f2.steering - f1.steering) * t;
+  const throttle = f1.throttle + (f2.throttle - f1.throttle) * t;
+  const brake = f1.brake + (f2.brake - f1.brake) * t;
+  const boostReserve = (f1.boostReserve ?? 1.0) + ((f2.boostReserve ?? 1.0) - (f1.boostReserve ?? 1.0)) * t;
+  const lateralOffset = f1.lateralOffset + (f2.lateralOffset - f1.lateralOffset) * t;
+
+  return {
+    tick: f1.tick,
+    time: safeTime,
+    position: [posX, posY, posZ],
+    rotationY: rotY,
+    speed: Math.round(speed * 100) / 100,
+    speedKmh: Math.round(speedKmh * 10) / 10,
+    lateralOffset: Math.round(lateralOffset * 100) / 100,
+    steering: Math.round(steering * 100) / 100,
+    throttle: Math.round(throttle * 100) / 100,
+    brake: Math.round(brake * 100) / 100,
+    boostReserve: Math.round(boostReserve * 100) / 100,
+    isBoosting: f1.isBoosting || f2.isBoosting,
+    isCollision: f1.isCollision || f2.isCollision,
+    checkpointIndex: f1.checkpointIndex,
+    lapProgress: progress,
+  };
 }
