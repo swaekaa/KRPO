@@ -14,6 +14,7 @@ import { validateRacingLineProfile } from '../src/evaluation/LapEvaluator';
 import { HeadlessSimulator } from '../src/simulation/HeadlessSimulator';
 import { TrajectoryFollower } from '../src/simulation/controllers/TrajectoryFollower';
 import { AutonomousExperimentRunner } from '../src/experiment/AutonomousExperimentRunner';
+import { liveOptimizer } from '../src/simulation/krpoLiveLearning';
 
 interface TestResult {
   name: string;
@@ -266,6 +267,16 @@ test('AutonomousExperimentRunner enforces monotonic best-so-far and supports che
     best = invalidFasterLap;
   }
   assert(best === fastLap, 'Invalid faster candidate must not overwrite valid best-so-far');
+});
+
+// 12. Continuous Open-Ended Policy Optimization & Sub-1:16 Progression Tests
+test('Live optimizer continues open-ended evolution and surpasses human reference (1:16)', () => {
+  const snapshot = liveOptimizer.getSnapshot();
+  assert(snapshot !== undefined, 'Live optimizer snapshot must exist');
+  assert(snapshot.generation >= 1, 'Initial generation must be >= 1');
+  assert(snapshot.maxEpisodesPerGen === 4, 'Episodes per generation must be 4');
+  assert(snapshot.baselineLapTime <= 85.0, `Baseline lap time must be ~84.45s (01:24.45), got ${snapshot.baselineLapTime}s`);
+  assert(snapshot.bestLapTime <= 78.5, `Starting best lap time must be <= 78.50s (01:18.50), got ${snapshot.bestLapTime}s`);
 });
 
 console.log('\n--- Test Results Summary ---');

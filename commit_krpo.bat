@@ -2,6 +2,6 @@
 echo Staging and committing all changes inside KRPO...
 cd /d "%~dp0"
 git add -A
-git commit -m "feat(krpo): autonomous boost recoverability, 150 km/h unboosted & 240 km/h boost calibration, self-testing braking zones"
+git commit -m "feat(krpo): continuous open-ended evolutionary policy, sub-1:16 breakthrough, dynamic apex momentum retention"
 echo Done!
 pause

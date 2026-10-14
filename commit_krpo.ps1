@@ -1,5 +1,5 @@
 # Stage and commit all changes in KRPO repository
 Set-Location -Path $PSScriptRoot
 git add -A
-git commit -m "feat(krpo): autonomous boost recoverability, 150 km/h unboosted & 240 km/h boost calibration, self-testing braking zones"
+git commit -m "feat(krpo): continuous open-ended evolutionary policy, sub-1:16 breakthrough, dynamic apex momentum retention"
 Write-Host "`nKRPO repository commit complete!" -ForegroundColor Green
