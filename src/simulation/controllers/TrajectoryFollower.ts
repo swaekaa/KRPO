@@ -198,8 +198,10 @@ export class TrajectoryFollower {
         upcomingCornerId = wp.cornerId ?? Math.floor(checkIdx / 50);
       }
 
-      // Check if this waypoint represents a decelerating corner entry
-      if (wp.isBrakingPoint || wp.targetSpeed < carSpeed * 0.88 || Math.abs(wp.curvature) > 0.02) {
+      // Check if this waypoint represents a genuine decelerating corner entry (tight hairpins)
+      // High-speed sweepers, start chicane cut, and exit kinks (|kappa| <= 0.040) are flat out and do NOT require braking
+      const isTrueBrakingZone = wp.isBrakingPoint || (wp.targetSpeed < carSpeed * 0.82 && Math.abs(wp.curvature) > 0.040);
+      if (isTrueBrakingZone) {
         if (distToUpcomingBrakingPoint === Infinity) {
           distToUpcomingBrakingPoint = distAhead;
         }
@@ -213,16 +215,17 @@ export class TrajectoryFollower {
     const speedDeltaSq = Math.max(0, carSpeed * carSpeed - targetSpeedAhead * targetSpeedAhead);
     const requiredStoppingDist = (speedDeltaSq / (2 * effectiveBrakingAccel)) + cornerMargin;
 
-    // Boost Cutoff: Cut boost early before entering braking distance (+6.0m buffer)
+    // Boost Cutoff: Cut boost only when genuinely approaching an unavoidable braking zone
     const isApproachingBrakingZone = distToUpcomingBrakingPoint < (requiredStoppingDist + 6.0);
 
     // Boost Recoverability:
-    // Car has passed the apex, steering is centering (|steering| <= tolerance),
-    // and car is stable on track. Trigger boost immediately out of the corner exit!
+    // Car has passed the apex or is navigating flat-out sweepers/kinks (|curvature| < 0.035),
+    // steering is within tolerance, and car is stable on track.
+    // Trigger boost immediately and maintain it through flat-out turns!
     const isCornerExitRecovery = 
-      currCurvature < 0.015 &&
-      Math.abs(steering) <= this.gains.boostSteerTolerance &&
-      Math.abs(state.lateralOffset) < 4.2;
+      currCurvature < 0.035 &&
+      Math.abs(steering) <= this.gains.boostSteerTolerance * 1.5 &&
+      Math.abs(state.lateralOffset) < 4.4;
 
     const canBoost = 
       !this.gains.boostDisabled &&

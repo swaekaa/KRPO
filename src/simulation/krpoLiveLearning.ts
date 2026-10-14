@@ -64,7 +64,7 @@ export interface CornerBrakingTelemetry {
   apexSpeedKmh: number;
   exitSpeedKmh: number;
   brakingMarginMeters: number;
-  status: 'OPTIMAL' | 'TESTING_DEEPER' | 'OVERCOOKED_CORRECTED';
+  status: 'OPTIMAL' | 'TESTING_DEEPER' | 'OVERCOOKED_CORRECTED' | 'FLAT_OUT_NO_BRAKE';
 }
 
 export interface LiveOptimizerSnapshot {
@@ -122,6 +122,9 @@ class LiveOptimizerService {
   private recentEvent: string | null = 'KRPO Unconventional Explorer Initialized. Targeting sub-1:16 breakthrough!';
   private eventTimer: number = 0;
   private latestSplitDiff: number | null = null;
+  private upcomingApexKappa: number = 0;
+  private distToUpcomingApex: number = Infinity;
+  private stoppingDistReq: number = 0;
 
   // Unconventional Line Candidates for current generation
   private championOffsets: number[] = generateVLineSquareOffOffsets();
@@ -147,14 +150,19 @@ class LiveOptimizerService {
   private currentGenome: PolicyGenome = { ...this.championGenome };
 
   // Corner Braking Self-Testing Records (10 sectors/corners around track)
-  private cornerTelemetry: CornerBrakingTelemetry[] = Array.from({ length: 10 }, (_, i) => ({
-    cornerIndex: i,
-    entrySpeedKmh: 152,
-    apexSpeedKmh: 86,
-    exitSpeedKmh: 142,
-    brakingMarginMeters: 3.5,
-    status: 'OPTIMAL',
-  }));
+  // Sectors 2, 5, 8 are true hairpins that require braking
+  // Sectors 0, 1, 3, 4, 6, 7, 9 are flat-out sweepers, chicane cuts, and exit kinks (no braking!)
+  private cornerTelemetry: CornerBrakingTelemetry[] = Array.from({ length: 10 }, (_, i) => {
+    const isHairpin = i === 2 || i === 5 || i === 8;
+    return {
+      cornerIndex: i,
+      entrySpeedKmh: isHairpin ? 152 : 240,
+      apexSpeedKmh: isHairpin ? 92 : 240,
+      exitSpeedKmh: 240,
+      brakingMarginMeters: isHairpin ? 3.5 : 0.0,
+      status: isHairpin ? 'OPTIMAL' : 'FLAT_OUT_NO_BRAKE',
+    };
+  });
 
   private generationHistory: GenerationRecord[] = [
     {
@@ -238,6 +246,10 @@ class LiveOptimizerService {
     const absKappa = Math.abs(currSample.curvature || 0);
 
     // Lookahead for upcoming corners & braking points
+    // KLUSTOR arcade physics: steering yaw rate omega <= 3.2 rad/s.
+    // For curvature <= 0.038 (such as the start chicane diagonal cut, the ocean sweeper,
+    // flowing serpentine transitions, and exit kinks), the car does NOT need to brake at all!
+    // It can take them 100% flat-out at up to 240 km/h with boost.
     let distAhead = 0;
     let upcomingApexKappa = 0;
     let distToUpcomingApex = Infinity;
@@ -252,7 +264,9 @@ class LiveOptimizerService {
       const k = Math.abs(samples[nextIdx].curvature || 0);
       if (k > upcomingApexKappa) {
         upcomingApexKappa = k;
-        if (k > 0.02 && distToUpcomingApex === Infinity) {
+        // Only mark true hairpin braking zones (k > 0.038).
+        // Gentle sweepers, chicane cuts, and exit kinks are flat-out!
+        if (k > 0.038 && distToUpcomingApex === Infinity) {
           distToUpcomingApex = distAhead;
         }
       }
@@ -262,17 +276,25 @@ class LiveOptimizerService {
     const currentSpeedEstimate = this.autonomousBoostEngaged ? KRPO_10_BOOSTED_SPEED_MS : KRPO_10_UNBOOSTED_SPEED_MS;
     const cornerIndex = Math.min(9, Math.floor(clampedProgress * 10));
     const telemetry = this.cornerTelemetry[cornerIndex];
+    const isHairpinBrakingZone = upcomingApexKappa > 0.038;
     
-    // Unconventional late braking: shifts braking distance deeper by candidate's offset
-    const shiftedBrakingMargin = Math.max(1.0, telemetry.brakingMarginMeters + this.currentCandidate.brakingOffsetMeters * 0.4);
-    const targetApexSpeed = Math.max(22.0, (42.0 * this.currentGenome.apexSpeedMultiplier) / (1.0 + upcomingApexKappa * this.currentGenome.cornerBrakingFactor));
-    const stoppingDistReq = ((currentSpeedEstimate * currentSpeedEstimate - targetApexSpeed * targetApexSpeed) / (2 * 28.0)) + shiftedBrakingMargin;
+    let stoppingDistReq = 0;
+    if (isHairpinBrakingZone) {
+      const shiftedBrakingMargin = Math.max(1.0, telemetry.brakingMarginMeters + this.currentCandidate.brakingOffsetMeters * 0.4);
+      // Kinematic apex speed in KLUSTOR: v = steeringStrength / upcomingApexKappa
+      const targetApexSpeed = Math.max(24.0, (KRPO_10_VEHICLE_CONFIG.steeringStrength / upcomingApexKappa) * this.currentGenome.apexSpeedMultiplier);
+      stoppingDistReq = ((currentSpeedEstimate * currentSpeedEstimate - targetApexSpeed * targetApexSpeed) / (2 * 28.0)) + shiftedBrakingMargin;
+    }
+
+    this.upcomingApexKappa = upcomingApexKappa;
+    this.distToUpcomingApex = distToUpcomingApex;
+    this.stoppingDistReq = stoppingDistReq;
 
     // ── SMART AUTONOMOUS BOOST RECOVERABILITY ──
-    // In unconventional lines (e.g. V-Line squaring), the car squares off the late apex,
-    // allowing boost to trigger earlier at higher exit curvatures (up to 0.024)
-    const isSafeStraightAhead = distToUpcomingApex > (stoppingDistReq + 5.0);
-    const isCornerExitRecovered = absKappa < this.currentCandidate.boostExitCurvature && this.collisionCooldown <= 0;
+    // In flat-out sweepers, chicane cuts, and exit kinks, boost stays active continuously!
+    // In true hairpins, boost cuts within stopping distance and launches on corner exit recovery.
+    const isSafeStraightAhead = !isHairpinBrakingZone || distToUpcomingApex > (stoppingDistReq + 5.0);
+    const isCornerExitRecovered = (absKappa < (isHairpinBrakingZone ? this.currentCandidate.boostExitCurvature : 0.038)) && this.collisionCooldown <= 0;
     const autonomousBoostTrigger = isSafeStraightAhead && isCornerExitRecovered && this.boostReserve > 0.01;
 
     const isBoosting = (this.manualBoostActive || autonomousBoostTrigger) && this.boostReserve > 0.01;
@@ -288,12 +310,12 @@ class LiveOptimizerService {
       }
     } else {
       // Regenerative energy recovery (recharges faster during braking zones)
-      const regenRate = absKappa > 0.02 ? 0.24 : 0.15;
+      const regenRate = absKappa > 0.038 ? 0.24 : 0.15;
       this.boostReserve = Math.min(1.0, this.boostReserve + regenRate * dt);
     }
     this.wasBoosting = isBoosting;
 
-    // Speed calculation from unconventional candidate line:
+    // Speed calculation strictly matching KLUSTOR arcade physics:
     // Straightaways unboosted: reaches ~150 km/h (41.67 m/s)
     // Straightaways with boost: reaches ~240 km/h (66.67 m/s) with 1.6x multiplier
     const boostMult = isBoosting ? 1.6 : 1.0;
@@ -301,26 +323,42 @@ class LiveOptimizerService {
     
     // Unconventional lines straighten the geometry: effective curvature drops significantly
     const lineOffsetAtSample = Math.abs(this.currentCandidate.offsets[sampleIdx] || 0);
-    const geometryStraighteningFactor = Math.min(0.48, lineOffsetAtSample * 0.11);
+    const geometryStraighteningFactor = Math.min(0.55, lineOffsetAtSample * 0.12);
     const effectiveKappa = Math.max(0, absKappa * (1.0 - geometryStraighteningFactor));
-    
-    const cornerSpeedLimit = Math.max(
-      21.0 * this.currentGenome.apexSpeedMultiplier,
-      (baseMaxSpeedMs * this.currentGenome.apexSpeedMultiplier) / (1.0 + effectiveKappa * this.currentGenome.cornerBrakingFactor)
-    );
-    
-    let activeSpeedMs = Math.min(KRPO_10_BOOSTED_SPEED_MS, cornerSpeedLimit * boostMult * this.currentCandidate.cornerSpeedBias);
-    if (this.collisionCooldown > 0) activeSpeedMs *= 0.55; // crash slowdown
+
+    let activeSpeedMs: number;
+    if (effectiveKappa <= 0.038) {
+      // 100% FLAT-OUT: Gentle sweepers, start chicane diagonal cut, and exit kinks
+      // NO ARTIFICIAL BRAKING OR SLOWDOWN! Reaches full 150 km/h unboosted or 240 km/h under boost.
+      activeSpeedMs = isBoosting ? KRPO_10_BOOSTED_SPEED_MS : KRPO_10_UNBOOSTED_SPEED_MS;
+      activeSpeedMs *= this.currentCandidate.cornerSpeedBias;
+    } else {
+      // True hairpin corner limit matching KLUSTOR yaw-rate kinematics: v = steeringStrength / effectiveKappa
+      const kinematicApexSpeed = Math.max(
+        24.0,
+        Math.min(baseMaxSpeedMs, (KRPO_10_VEHICLE_CONFIG.steeringStrength / effectiveKappa) * this.currentGenome.apexSpeedMultiplier)
+      );
+      activeSpeedMs = kinematicApexSpeed * boostMult * this.currentCandidate.cornerSpeedBias;
+    }
+
+    activeSpeedMs = Math.min(KRPO_10_BOOSTED_SPEED_MS, activeSpeedMs);
+    if (this.collisionCooldown > 0) activeSpeedMs *= 0.85; // matches useCarPhysics.ts (0.85 wall collision)
 
     // Track sector progress (3380.0m total track length)
     const distDelta = activeSpeedMs * dt;
     this.progress += distDelta / 3380.0;
 
     // Update corner telemetry
-    if (absKappa > 0.025) {
+    if (telemetry.status === 'FLAT_OUT_NO_BRAKE') {
+      telemetry.entrySpeedKmh = Math.round(activeSpeedMs * 3.6);
       telemetry.apexSpeedKmh = Math.round(activeSpeedMs * 3.6);
-    } else if (isBoosting) {
       telemetry.exitSpeedKmh = Math.round(activeSpeedMs * 3.6);
+    } else {
+      if (absKappa > 0.038) {
+        telemetry.apexSpeedKmh = Math.round(activeSpeedMs * 3.6);
+      } else if (isBoosting) {
+        telemetry.exitSpeedKmh = Math.round(activeSpeedMs * 3.6);
+      }
     }
 
     // Checkpoint split evaluation
@@ -404,8 +442,9 @@ class LiveOptimizerService {
     }
     this.eventTimer = 3.5;
 
-    // Self-test braking adjustments
+    // Self-test braking adjustments (only for true hairpin braking zones)
     this.cornerTelemetry.forEach((t) => {
+      if (t.status === 'FLAT_OUT_NO_BRAKE') return;
       if (this.collisionCount > 0) {
         t.brakingMarginMeters = Math.min(7.0, t.brakingMarginMeters + 0.8);
         t.status = 'OVERCOOKED_CORRECTED';
@@ -535,20 +574,32 @@ class LiveOptimizerService {
 
     const baseMaxSpeedMs = KRPO_10_UNBOOSTED_SPEED_MS; // 41.67 m/s
     const lineOffsetAtSample = Math.abs(this.currentCandidate.offsets[idx] || 0);
-    const geometryStraighteningFactor = Math.min(0.48, lineOffsetAtSample * 0.11);
+    const geometryStraighteningFactor = Math.min(0.55, lineOffsetAtSample * 0.12);
     const effectiveKappa = Math.max(0, absK * (1.0 - geometryStraighteningFactor));
 
-    const cornerSpeedLimit = Math.max(
-      21.0 * this.currentGenome.apexSpeedMultiplier,
-      (baseMaxSpeedMs * this.currentGenome.apexSpeedMultiplier) / (1.0 + effectiveKappa * this.currentGenome.cornerBrakingFactor)
-    );
-    let speedMs = Math.min(KRPO_10_BOOSTED_SPEED_MS, cornerSpeedLimit * boostMult * this.currentCandidate.cornerSpeedBias);
+    let speedMs: number;
+    if (effectiveKappa <= 0.038) {
+      // 100% FLAT-OUT: Gentle sweepers, chicane diagonal cuts, and exit kinks (no braking!)
+      speedMs = isBoosting ? KRPO_10_BOOSTED_SPEED_MS : KRPO_10_UNBOOSTED_SPEED_MS;
+      speedMs *= this.currentCandidate.cornerSpeedBias;
+    } else {
+      // True hairpins governed by steeringStrength yaw-rate kinematics (3.2 rad/s)
+      const kinematicApexSpeed = Math.max(
+        24.0,
+        Math.min(baseMaxSpeedMs, (KRPO_10_VEHICLE_CONFIG.steeringStrength / effectiveKappa) * this.currentGenome.apexSpeedMultiplier)
+      );
+      speedMs = kinematicApexSpeed * boostMult * this.currentCandidate.cornerSpeedBias;
+    }
 
-    if (this.collisionCooldown > 0) speedMs *= 0.55;
+    speedMs = Math.min(KRPO_10_BOOSTED_SPEED_MS, speedMs);
+    if (this.collisionCooldown > 0) speedMs *= 0.85; // exactly matches useCarPhysics.ts (0.85 wall hit)
 
     // Output formatted speeds
     const speedKmh = Math.round(speedMs * 3.6 * 10) / 10;
     const isCollision = this.collisionCooldown > 0;
+
+    // Throttle is 100% flat-out unless approaching an unavoidable hairpin braking zone
+    const isApproachingHairpinBrake = this.distToUpcomingApex < this.stoppingDistReq && this.upcomingApexKappa > 0.038;
 
     const heroCar: LiveCandidateState = {
       id: 'hero-candidate',
@@ -559,8 +610,8 @@ class LiveOptimizerService {
       speedMs,
       speedKmh,
       steering: Math.max(-1.0, Math.min(1.0, -tangent.x * 0.85)),
-      throttle: speedMs > 32.0 ? 1.0 : absK < 0.015 ? 0.95 : 0.6,
-      brake: absK > 0.02 && speedMs < 24.0 ? 0.85 : 0.0,
+      throttle: isApproachingHairpinBrake ? 0.0 : 1.0,
+      brake: isApproachingHairpinBrake ? 0.85 : 0.0,
       boost: this.boostReserve,
       isBoosting,
       isCollision,

@@ -43,7 +43,9 @@ export function generateVLineSquareOffOffsets(trackData: TrackExportData = extra
     const sCurr = trackData.samples[i];
     const absK = Math.abs(sCurr.curvature || 0);
 
-    if (absK > 0.015) {
+    // Only hairpins and 90-degree corners (absK > 0.038) require V-line diamond squaring.
+    // High-speed sweepers, start chicane, and exit kinks (absK <= 0.038) are taken flat-out with a smooth apex hug.
+    if (absK > 0.038) {
       // Find local apex window
       let isLateApex = false;
       for (let look = 1; look <= 8; look++) {
@@ -62,6 +64,10 @@ export function generateVLineSquareOffOffsets(trackData: TrackExportData = extra
         // Stay wide on entry to square off (+sign * 4.2m)
         offsets[i] = sign * Math.min(MAX_OFFSET, 4.2);
       }
+    } else if (absK > 0.010) {
+      // Gentle sweepers & flat-out kinks: smooth apex hug to minimize steering deflection
+      const sign = Math.sign(sCurr.curvature || 1);
+      offsets[i] = -sign * Math.min(MAX_OFFSET, 2.2);
     } else {
       offsets[i] = 0; // Centerline on straights
     }
@@ -113,10 +119,14 @@ export function generateDeepTrailBrakeOffsets(trackData: TrackExportData = extra
     const k = sCurr.curvature || 0;
     const absK = Math.abs(k);
 
-    if (absK > 0.012) {
+    if (absK > 0.038) {
       const sign = Math.sign(k || 1);
-      // Aggressive inside dive on entry
+      // Aggressive inside dive on entry into hairpins
       offsets[i] = -sign * Math.min(MAX_OFFSET, 4.3);
+    } else if (absK > 0.010) {
+      // Gentle sweepers: smooth inside line
+      const sign = Math.sign(k || 1);
+      offsets[i] = -sign * Math.min(MAX_OFFSET, 2.0);
     } else {
       offsets[i] = 0;
     }

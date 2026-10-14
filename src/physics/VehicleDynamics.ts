@@ -90,28 +90,27 @@ export const KRPO_10_VEHICLE_CONFIG: VehicleParameters = {
 
 /**
  * Maximum velocity allowable around a curve of given curvature kappa (1/m)
- * constrained by the vehicle's yaw rate (steeringStrength).
+ * constrained strictly by KLUSTOR's arcade vehicle physics (useCarPhysics.ts):
  * 
  * In KLUSTOR, omega = d(theta)/dt <= steeringStrength.
  * Since v * kappa = omega, |v| <= steeringStrength / |kappa|.
- * Also clamped by the vehicle's top speed.
+ * For design 10.0, steeringStrength = 3.2 rad/s.
+ * For gentle sweepers and chicanes (|kappa| <= 0.040), the steering capacity allows
+ * taking the turn 100% FLAT-OUT at top speed (up to 240 km/h) without braking!
  */
 export function maxCornerSpeed(
   kappa: number,
-  vehicle: VehicleParameters = BASE_VEHICLE_CONFIG,
-  lateralGForceLimit: number = 9.81 * 1.3 // ~1.3g max lateral tire adhesion equivalent
+  vehicle: VehicleParameters = BASE_VEHICLE_CONFIG
 ): number {
   const absKappa = Math.abs(kappa);
   if (absKappa < 1e-4) {
     return vehicle.topSpeed;
   }
 
-  // 1. Steering yaw-rate limit: omega <= steeringStrength => v <= steeringStrength / kappa
+  // Steering yaw-rate limit: omega <= steeringStrength => v <= steeringStrength / kappa
   const steerSpeedLimit = vehicle.steeringStrength / absKappa;
 
-  // 2. Lateral acceleration friction limit: v^2 * kappa <= a_lat_max => v <= sqrt(a_lat / kappa)
-  const gripSpeedLimit = Math.sqrt(lateralGForceLimit / absKappa);
-
-  const cornerLimit = Math.min(steerSpeedLimit, gripSpeedLimit);
-  return Math.min(vehicle.topSpeed, Math.max(3.0, cornerLimit));
+  // Clamped by vehicle's top speed (150 km/h unboosted / 240 km/h boosted)
+  return Math.min(vehicle.topSpeed, Math.max(12.0, steerSpeedLimit));
 }
+

@@ -112,6 +112,33 @@ Traditional geometric racing lines prioritize maximizing minimum apex speed thro
 - **Swarm Racers (Agent Alpha, Beta, Gamma):** Concurrently drive V-Line, Chicane Cut, and Trail-Brake trajectories in real time with distinct visual identification.
 - **Live Replay HUD:** Live HUD displays `🔥 UNCONVENTIONAL LINE: [STYLE]` and active braking shift telemetry.
 
+### 3.4 Eliminating False Braking on Sweepers & Exact 10.0 Game Physics Fidelity
+
+#### 1. Why the Car Was Unnecessarily Braking on Gentle Turns
+In previous iterations, two artificial bottlenecks caused the car to brake hard and cut boost on gentle curves:
+1. **Artificial 1.3g Grip Clamp:** `maxCornerSpeed` previously enforced an arbitrary $v \le \sqrt{1.3g / \kappa}$ cap, which forced high-speed sweepers ($\kappa \approx 0.02$) down to 90 km/h.
+2. **Premature Braking Lookahead:** Any curvature $\kappa > 0.02$ was classified as a braking zone. Boost was cut 50–80m in advance, and throttle was halved to 0.6.
+
+#### 2. Exact Physics Parity with KLUSTOR's `useCarPhysics.ts`
+In KLUSTOR's authentic arcade physics engine (`src/game/hooks/useCarPhysics.ts`):
+- **Steering Yaw-Rate Capacity:** For design 10.0 (`safeHandling = 10`), $\text{STEERING\_STRENGTH} = 2.0 \times 1.6 = \mathbf{3.2\text{ rad/s}}$.
+- **Kinematic Cornering Velocity:** $v_{\text{steer}} = \frac{\text{STEERING\_STRENGTH}}{\kappa_{\text{effective}}} = \frac{3.2}{\kappa_{\text{effective}}}$.
+- **Flat-Out Threshold ($\kappa \le 0.038$):** For all curvatures $\le 0.038$:
+  $$v_{\text{steer}} \ge \frac{3.2}{0.038} = 84.2\text{ m/s} = 303\text{ km/h} \gg 240\text{ km/h}$$
+  **The car does NOT need to brake at all!**
+
+#### 3. Non-Braking Turns on Vice Coast Circuit
+| Sector / Turn | Curvature $\kappa$ | Old Behavior | New Feasible Behavior |
+| :--- | :--- | :--- | :--- |
+| **Twist 1 (Start Chicane Cut)** | $\approx 0.012$ | Braked to 110 km/h, boost cut | **100% FLAT OUT (240 km/h)** • `FLAT_OUT_NO_BRAKE` |
+| **Sector 1 (Hairpin 1 Run-up)** | $\approx 0.015$ | Throttle cut to 0.6 | **100% FLAT OUT (240 km/h)** • `FLAT_OUT_NO_BRAKE` |
+| **Hairpin 1 (Outer Coast)** | $> 0.045$ | Textbook line | **Late V-Line Square-Off** • Carbon ceramic trail brake |
+| **Ocean Sweeper & Coastal Arc** | $\approx 0.015 - 0.022$ | Braked to 95 km/h | **100% FLAT OUT (240 km/h)** • Boost maintained uninterrupted |
+| **Hairpin 2 (Deep Corner)** | $> 0.050$ | Textbook line | **Deep Trail-Brake Dive** |
+| **Serpentine Flow Transitions** | $\approx 0.020 - 0.032$ | Braked to 90 km/h | **Fast Flowing (180–210 km/h)** • No heavy braking |
+| **Hairpin 3 (Return Hairpin)** | $> 0.048$ | Textbook line | **Late V-Line Square-Off** |
+| **Final Exit Kinks & Straight Launch**| $\approx 0.012 - 0.020$| Braked before finish | **100% FLAT OUT (240 km/h)** • Full boost across line |
+
 ---
 
 ## 4. Continuous Iterative Optimization & Monotonic Best-So-Far
@@ -150,4 +177,5 @@ Tests updated in `KRPO/tests/run_tests.ts`:
 - `AutonomousExperimentRunner enforces monotonic best-so-far and supports checkpointing` (PASS)
 - `Lap Evaluator detects profile validity correctly` (PASS)
 - `Unconventional Line Optimizer generates valid V-line squaring, chicane cut, and deep trail-braking candidates with shifted braking points` (PASS)
+- `Design 10.0 vehicle physics matches game and eliminates braking on flat-out sweepers/kinks` (PASS)
 

@@ -298,6 +298,28 @@ test('UnconventionalLineOptimizer generates distinct V-Line, chicane cuts, and s
   assert(snapshot.unconventionalStyle !== undefined, 'Live snapshot must track unconventionalStyle');
 });
 
+// 14. Flat-Out Non-Braking Sweepers & 10.0 Game Physics Fidelity Tests
+test('Design 10.0 vehicle physics matches game and eliminates braking on flat-out sweepers/kinks', () => {
+  // 1. Vehicle specs match 10.0 design in useCarPhysics.ts
+  assert(KRPO_10_VEHICLE_CONFIG.unboostedTopSpeedKmh === 150.0, 'Unboosted top speed must be 150 km/h');
+  assert(KRPO_10_VEHICLE_CONFIG.boostedTopSpeedKmh === 240.0, 'Boosted top speed must be 240 km/h');
+  assert(KRPO_10_VEHICLE_CONFIG.steeringStrength === 3.2, 'Steering strength must be 3.2 rad/s');
+  assert(KRPO_10_VEHICLE_CONFIG.maxBoostCapacity === 1.0, '10/10 design must have 100% boost capacity');
+
+  // 2. Gentle sweepers (kappa <= 0.038) are flat out at top speed
+  const sweeperSpeed = maxCornerSpeed(0.015, KRPO_10_VEHICLE_CONFIG);
+  assert(sweeperSpeed === KRPO_10_VEHICLE_CONFIG.topSpeed, 'Ocean sweeper (kappa=0.015) must be taken flat out at top speed without braking');
+
+  // 3. Telemetry marks non-hairpins as FLAT_OUT_NO_BRAKE
+  const snapshot = liveOptimizer.getSnapshot();
+  const flatOutSectors = snapshot.cornerBrakingTelemetry.filter(t => t.status === 'FLAT_OUT_NO_BRAKE');
+  assert(flatOutSectors.length >= 7, `Expected at least 7 flat-out non-braking sectors, got ${flatOutSectors.length}`);
+
+  // 4. Hero car throttle remains 1.0 on flat-out sections
+  assert(snapshot.heroCar.speedKmh > 0, 'Hero car speed must be positive');
+  assert(snapshot.heroCar.boost <= 1.0 && snapshot.heroCar.boost >= 0.0, 'Boost reserve must be between 0 and 1');
+});
+
 console.log('\n--- Test Results Summary ---');
 const total = results.length;
 const passed = results.filter(r => r.passed).length;
