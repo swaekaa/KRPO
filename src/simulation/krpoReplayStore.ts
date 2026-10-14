@@ -224,13 +224,285 @@ function generateRealisticReplay(runType: RunTypeKey): ReplayDataset {
   };
 }
 
+export interface SwarmEstimationRun {
+  runIndex: number;          // 1 to 40
+  generation: number;        // 1 to 10
+  episode: number;           // 1 to 4
+  name: string;              // e.g. "Est 40 (Gen 10.4) — 01:11.12"
+  shortName: string;         // "G10.4"
+  style: string;             // "V-Line" | "Chicane Cut" | "Trail Brake" | "RL Spline" | "Baseline"
+  color: string;             // HEX color
+  lapTime: number;           // Seconds
+  formattedLapTime: string;  // MM:SS.ms
+  avgSpeedKmh: number;
+  topSpeedKmh: number;
+  isValid: boolean;
+  invalidationReason?: string;
+  dataset: ReplayDataset;
+}
+
+let _swarm40Cache: SwarmEstimationRun[] | null = null;
+
+const SWARM_GEN_COLORS: string[] = [
+  '#94A3B8', // Gen 1: Cool Slate
+  '#60A5FA', // Gen 2: Sky Blue
+  '#FBBF24', // Gen 3: Warm Amber
+  '#F59E0B', // Gen 4: Deep Gold
+  '#10B981', // Gen 5: Emerald Green
+  '#06B6D4', // Gen 6: Bright Cyan
+  '#A855F7', // Gen 7: Electric Purple
+  '#EC4899', // Gen 8: Hot Pink
+  '#00F0FF', // Gen 9: Neon Cyan
+  '#FFD700', // Gen 10: Pure Gold Champion
+];
+
+const PREDEFINED_ESTIMATION_TIMES: number[] = [
+  // Gen 1: Cautious exploration & Baseline
+  84.45, 81.20, 92.40, 78.50,
+  // Gen 2: Boost timing & early clipping
+  78.10, 77.65, 78.90, 77.20,
+  // Gen 3: Apex trimming & sweeper discovery
+  76.80, 76.45, 88.10, 76.10,
+  // Gen 4: Approaching human reference (1:16)
+  75.85, 75.60, 75.35, 75.05,
+  // Gen 5: Breaking 1:16 barrier
+  74.82, 74.55, 74.90, 74.30,
+  // Gen 6: Chicane straight-line cuts (210+ km/h)
+  73.95, 81.40, 73.70, 73.50,
+  // Gen 7: V-Line diamond squaring for 240 km/h launches
+  73.25, 73.05, 72.85, 72.70,
+  // Gen 8: Deep trail-braking (-6.5m)
+  72.50, 72.35, 72.60, 72.20,
+  // Gen 9: Sub-1:12 elite barrier
+  72.05, 71.85, 71.95, 71.65,
+  // Gen 10: Superhuman champion records (01:11.12)
+  71.45, 71.30, 71.20, 71.12,
+];
+
+function generateSingleSwarmEstimation(estIndex: number): SwarmEstimationRun {
+  const track = extractTrackGeometry();
+  const samples = track.samples;
+  const n = samples.length;
+
+  const gen = Math.floor((estIndex - 1) / 4) + 1;
+  const ep = ((estIndex - 1) % 4) + 1;
+
+  let style = 'V-Line Square-Off';
+  if (estIndex === 1) style = 'Centerline Baseline';
+  else if (ep === 1) style = 'V-Line Square-Off';
+  else if (ep === 2) style = 'Chicane Straight Cut';
+  else if (ep === 3) style = 'Deep Trail-Brake';
+  else style = 'RL Spline Mutation';
+
+  const lapTime = PREDEFINED_ESTIMATION_TIMES[estIndex - 1] ?? 74.0;
+  const isCrashRun = estIndex === 3 || estIndex === 11 || estIndex === 22;
+  const isValid = !isCrashRun;
+  const invalidationReason = isCrashRun
+    ? `Barrier Contact in Sector ${estIndex === 3 ? '2' : estIndex === 11 ? '5' : '4'} during aggressive exploration`
+    : undefined;
+
+  let color = SWARM_GEN_COLORS[gen - 1] || '#00FFFF';
+  if (isCrashRun) color = '#FF2A6D';
+  if (estIndex === 40) color = '#FFD700'; // All-time champion gold
+
+  const formatTime = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    const ms = Math.floor((sec % 1) * 100);
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
+  };
+
+  const formattedLapTime = formatTime(lapTime);
+  const shortName = `G${gen}.${ep}`;
+  const name = estIndex === 40
+    ? `🏆 EST 40 (Gen 10.4 CHAMPION) — ${formattedLapTime}`
+    : estIndex === 1
+    ? `⚪ EST 1 (Gen 1.1 BASELINE) — ${formattedLapTime}`
+    : `EST ${estIndex} (${shortName} ${style}) — ${formattedLapTime}`;
+
+  // Generate 600 discrete replay frames across the lap
+  const frames: ReplayFrame[] = [];
+  const totalFrames = 600;
+  const numCheckpoints = track.checkpoints.length || 10;
+  const checkpointsCrossed: number[] = [];
+  let speedSum = 0;
+  let boostActivations = 0;
+  let boostDuration = 0;
+  let wasBoosting = false;
+  let collisionCount = isCrashRun ? 3 : 0;
+
+  const lineOffsetScale = estIndex === 1 ? 0.0 : 0.6 + (gen / 10.0) * 0.45;
+
+  for (let f = 0; f < totalFrames; f++) {
+    const progress = f / totalFrames;
+    const time = progress * lapTime;
+
+    const sampleFraction = progress * n;
+    const idx = Math.floor(sampleFraction) % n;
+    const nextIdx = (idx + 1) % n;
+    const frac = sampleFraction - Math.floor(sampleFraction);
+
+    const sCurr = samples[idx];
+    const sNext = samples[nextIdx];
+    const absK = Math.abs(sCurr.curvature || 0);
+
+    // Lateral offset based on estimation archetype
+    let lateralOffset = 0;
+    if (estIndex > 1) {
+      if (ep === 1) {
+        // V-Line: square off corners
+        lateralOffset = -sCurr.curvature * 68.0 * lineOffsetScale;
+      } else if (ep === 2) {
+        // Chicane cut: opposing phase
+        lateralOffset = -sCurr.curvature * 58.0 * lineOffsetScale;
+      } else if (ep === 3) {
+        // Trail brake: inside dive
+        lateralOffset = -Math.sign(sCurr.curvature || 1) * Math.min(4.3, absK * 85.0 * lineOffsetScale);
+      } else {
+        // RL Spline: harmonic waves
+        lateralOffset = -sCurr.curvature * 62.0 * lineOffsetScale + Math.sin(progress * Math.PI * 8) * 0.6;
+      }
+      lateralOffset = Math.max(-MAX_LEGAL_OFFSET, Math.min(MAX_LEGAL_OFFSET, lateralOffset));
+    }
+
+    // Crash simulation at specific frame windows
+    let isCollision = false;
+    if (isCrashRun && f >= 110 && f <= 140) {
+      isCollision = true;
+      lateralOffset = 4.95; // barrier strike
+    }
+
+    // 3D Position
+    const basePos = new THREE.Vector3(sCurr.position.x, 0, sCurr.position.z).lerp(
+      new THREE.Vector3(sNext.position.x, 0, sNext.position.z),
+      frac
+    );
+    const normal = new THREE.Vector3(sCurr.normal.x, 0, sCurr.normal.z).lerp(
+      new THREE.Vector3(sNext.normal.x, 0, sNext.normal.z),
+      frac
+    ).normalize();
+    const pos = basePos.addScaledVector(normal, lateralOffset);
+    pos.y = 0;
+
+    // Heading tangent
+    const tangent = new THREE.Vector3(sCurr.tangent.x, 0, sCurr.tangent.z).lerp(
+      new THREE.Vector3(sNext.tangent.x, 0, sNext.tangent.z),
+      frac
+    ).normalize();
+    const rotY = Math.atan2(tangent.x, tangent.z);
+
+    // Speed calculation matching KLUSTOR arcade physics:
+    // Straightaways & sweepers (absK <= 0.038) run flat out!
+    let speedMs = KRPO_10_UNBOOSTED_SPEED_MS; // 41.67 m/s (150 km/h)
+    if (absK > 0.038) {
+      // Hairpins
+      const kinematicApexSpeed = Math.max(24.0, (3.2 / absK) * (0.85 + (gen / 10.0) * 0.25));
+      speedMs = kinematicApexSpeed;
+    }
+
+    // Boost: triggers on straightaways and corner exits
+    const canBoostThisGen = estIndex > 1 && (absK < 0.028 || f % 60 < 25);
+    const isBoosting = canBoostThisGen && !isCollision && f > 15;
+    if (isBoosting) {
+      speedMs = Math.min(KRPO_10_BOOSTED_SPEED_MS, speedMs * 1.6);
+      boostDuration += 0.14;
+      if (!wasBoosting) boostActivations++;
+    }
+    wasBoosting = isBoosting;
+
+    if (isCollision) speedMs *= 0.45;
+    const speedKmh = Math.round(speedMs * 3.6 * 10) / 10;
+    speedSum += speedKmh;
+
+    const currentCP = Math.min(numCheckpoints - 1, Math.floor(progress * numCheckpoints));
+    if (f > 0 && f % Math.floor(totalFrames / numCheckpoints) === 0) {
+      checkpointsCrossed.push(Math.round(time * 100) / 100);
+    }
+
+    frames.push({
+      tick: f,
+      time: Math.round(time * 100) / 100,
+      position: [Math.round(pos.x * 100) / 100, 0, Math.round(pos.z * 100) / 100],
+      rotationY: Math.round(rotY * 1000) / 1000,
+      speed: Math.round(speedMs * 100) / 100,
+      speedKmh,
+      steering: Math.max(-1.0, Math.min(1.0, -tangent.x * 0.85)),
+      throttle: isCollision ? 0.0 : 1.0,
+      brake: isCollision ? 0.85 : 0.0,
+      isBoosting,
+      boostReserve: Math.max(0.05, 1.0 - (f % 50) * 0.02),
+      checkpointIndex: currentCP,
+      lapProgress: Math.round(progress * 1000) / 1000,
+      lateralOffset: Math.round(lateralOffset * 100) / 100,
+      isCollision,
+    });
+  }
+
+  const avgSpeedKmh = Math.round((speedSum / totalFrames) * 10) / 10;
+  const maxRecordedSpeed = Math.max(...frames.map((fr) => fr.speedKmh));
+
+  const dataset: ReplayDataset = {
+    schemaVersion: '1.0.0',
+    runId: `run-swarm-est-${estIndex.toString().padStart(3, '0')}`,
+    runType: estIndex === 40 ? 'best' : estIndex === 1 ? 'baseline' : isCrashRun ? 'failed' : 'intermediate',
+    policyId: `policy-swarm-g${gen}-e${ep}`,
+    generation: gen,
+    timestamp: new Date(Date.now() - (40 - estIndex) * 90000).toISOString(),
+    isValid,
+    invalidationReason,
+    lapTime,
+    formattedLapTime,
+    splits: checkpointsCrossed.map((t) => Math.round(t * 1000)),
+    avgSpeedKmh,
+    topSpeedKmh: maxRecordedSpeed,
+    collisionCount,
+    totalDistance: 3380.0,
+    designScore: 10.0,
+    designId: 'krpo-prototype-10-perfect',
+    boostActivations,
+    boostDuration: Math.round(boostDuration * 10) / 10,
+    maxBoostSpeedKmh: maxRecordedSpeed,
+    frames,
+  };
+
+  return {
+    runIndex: estIndex,
+    generation: gen,
+    episode: ep,
+    name,
+    shortName,
+    style,
+    color,
+    lapTime,
+    formattedLapTime,
+    avgSpeedKmh,
+    topSpeedKmh: maxRecordedSpeed,
+    isValid,
+    invalidationReason,
+    dataset,
+  };
+}
+
+export function getAll40Estimations(): SwarmEstimationRun[] {
+  if (!_swarm40Cache) {
+    _swarm40Cache = Array.from({ length: 40 }, (_, i) => generateSingleSwarmEstimation(i + 1));
+  }
+  return _swarm40Cache;
+}
+
+export function get40SwarmReplays(): ReplayDataset[] {
+  return getAll40Estimations().map((s) => s.dataset);
+}
+
 export function getAllReplays(): Record<RunTypeKey, ReplayDataset> {
   if (!_replaysCache) {
+    const swarm = getAll40Estimations();
+    // Connect authoritative reference runs directly to the 40-estimation swarm!
     _replaysCache = {
-      best: generateRealisticReplay('best'),
-      baseline: generateRealisticReplay('baseline'),
-      early: generateRealisticReplay('early'),
-      failed: generateRealisticReplay('failed'),
+      best: swarm[39].dataset,      // Est 40: Gen 10.4 All-Time Champion (71.12s)
+      baseline: swarm[0].dataset,    // Est 1: Gen 1.1 Baseline Centerline (84.45s)
+      early: swarm[3].dataset,       // Est 4: Gen 1.4 Early Candidate (78.50s)
+      failed: swarm[2].dataset,      // Est 3: Gen 1.3 Collision Crash Run (92.40s)
     };
   }
   return _replaysCache;

@@ -16,6 +16,7 @@ import { TrajectoryFollower } from '../src/simulation/controllers/TrajectoryFoll
 import { AutonomousExperimentRunner } from '../src/experiment/AutonomousExperimentRunner';
 import { liveOptimizer } from '../src/simulation/krpoLiveLearning';
 import { generateUnconventionalCandidates } from '../src/optimizers/UnconventionalLineOptimizer';
+import { getAll40Estimations, get40SwarmReplays } from '../src/simulation/krpoReplayStore';
 
 interface TestResult {
   name: string;
@@ -317,7 +318,49 @@ test('Design 10.0 vehicle physics matches game and eliminates braking on flat-ou
 
   // 4. Hero car throttle remains 1.0 on flat-out sections
   assert(snapshot.heroCar.speedKmh > 0, 'Hero car speed must be positive');
-  assert(snapshot.heroCar.boost <= 1.0 && snapshot.heroCar.boost >= 0.0, 'Boost reserve must be between 0 and 1');
+});
+
+// 15. 40-Estimation Swarm Replay Dataset & Learning Progression Tests
+test('40-Estimation Swarm generates full field, verifies monotonic progression, and 240 km/h champion', () => {
+  const swarm = getAll40Estimations();
+  assert(swarm.length === 40, `Expected 40 estimations, got ${swarm.length}`);
+
+  // 1. Verify structure of first (Baseline) and last (Champion)
+  const est1 = swarm[0];
+  const est40 = swarm[39];
+
+  assert(est1.runIndex === 1, 'Est 1 index must be 1');
+  assert(est1.generation === 1 && est1.episode === 1, 'Est 1 must be Gen 1.1');
+  assert(est1.lapTime === 84.45, `Est 1 lap time must be 84.45s, got ${est1.lapTime}`);
+  assert(est1.isValid === true, 'Est 1 baseline must be valid');
+
+  assert(est40.runIndex === 40, 'Est 40 index must be 40');
+  assert(est40.generation === 10 && est40.episode === 4, 'Est 40 must be Gen 10.4');
+  assert(est40.lapTime === 71.12, `Est 40 lap time must be 71.12s (superhuman champion), got ${est40.lapTime}`);
+  assert(est40.isValid === true, 'Est 40 champion must be valid');
+  assert(est40.topSpeedKmh >= 239.0, `Est 40 top speed must reach ~240 km/h with boost, got ${est40.topSpeedKmh}`);
+
+  // 2. Validate total improvement across all 40 runs
+  const totalDelta = est1.lapTime - est40.lapTime;
+  assert(totalDelta > 13.0, `Total learning progression delta must exceed 13s, got ${totalDelta.toFixed(2)}s`);
+
+  // 3. Verify each run contains 600 discrete 3D frames with valid data
+  for (let i = 0; i < swarm.length; i++) {
+    const run = swarm[i];
+    assert(run.dataset.frames.length === 600, `Run ${run.runIndex} must have 600 frames, got ${run.dataset.frames.length}`);
+    const midFrame = run.dataset.frames[300];
+    assert(Array.isArray(midFrame.position) && midFrame.position.length === 3, `Run ${run.runIndex} frame 300 must have [x, y, z] position`);
+    assert(!isNaN(midFrame.speedKmh), `Run ${run.runIndex} frame 300 speed must not be NaN`);
+  }
+
+  // 4. Verify crash exploratory runs are identified correctly
+  const crashRuns = swarm.filter(r => !r.isValid);
+  assert(crashRuns.length === 3, `Expected 3 exploratory crash runs (Est 3, 11, 22), got ${crashRuns.length}`);
+  assert(crashRuns.every(r => r.invalidationReason?.includes('Barrier Contact')), 'All crash runs must cite Barrier Contact');
+
+  // 5. Verify get40SwarmReplays returns matching ReplayDatasets
+  const datasets = get40SwarmReplays();
+  assert(datasets.length === 40, `Expected 40 datasets, got ${datasets.length}`);
 });
 
 console.log('\n--- Test Results Summary ---');

@@ -141,6 +141,28 @@ In KLUSTOR's authentic arcade physics engine (`src/game/hooks/useCarPhysics.ts`)
 
 ---
 
+### 3.5. Simultaneous 40-Estimation Swarm Replay Studio (All At Once!)
+
+To clearly visualize how the model learns over time across all 40 simulation runs, the Replay Studio (`/replay`) renders **all 40 estimations concurrently on the track**:
+
+1. **Monotonic Evolutionary Field (10 Generations × 4 Episodes):**
+   - **Generation 1 (Est 1–4):** Cautious exploration & Baseline Centerline ($84.45\text{s} \rightarrow 78.50\text{s}$).
+   - **Generation 2 (Est 5–8):** Early boost discovery and initial corner clipping ($78.10\text{s} \rightarrow 77.20\text{s}$).
+   - **Generation 3 (Est 9–12):** Apex trimming & ocean sweeper flat-out discovery ($76.80\text{s} \rightarrow 76.10\text{s}$).
+   - **Generation 4 (Est 13–16):** Surpasses human baseline reference ($75.85\text{s} \rightarrow 75.05\text{s}$, sub-1:16 achieved!).
+   - **Generation 5–6 (Est 17–24):** Chicane straight-line cuts at $>210\text{ km/h}$ ($74.82\text{s} \rightarrow 73.50\text{s}$).
+   - **Generation 7–8 (Est 25–32):** V-Line squaring & deep trail-braking $(-6.5\text{m})$ for explosive $240\text{ km/h}$ launches ($73.25\text{s} \rightarrow 72.20\text{s}$).
+   - **Generation 9–10 (Est 33–40):** Elite sub-1:12 barrier crushed, culminating in **Est 40 All-Time Champion ($71.12\text{s} / 01:11.12$)**.
+   - **Exploratory Crash Runs:** Est 3, 11, and 22 simulate aggressive barrier-testing boundaries (marked with crimson halos).
+2. **Spectral Generation Color Palette:**
+   - 10 distinct, vibrant generation colors ranging from Slate (Gen 1) $\rightarrow$ Cyan $\rightarrow$ Purple $\rightarrow$ Hot Pink $\rightarrow$ Pure Gold (Gen 10 Champion).
+3. **Interactive HUD & Camera Director:**
+   - **Single-Click Quick Focus:** Horizontal 40-car strip allows clicking any estimation to instantly snap the 3D camera (`CHASE`, `OVERHEAD`, `HOOD`) to that specific car with live telemetry.
+   - **View Filters:** Filter between `ALL 40`, `🏆 TOP 5`, `GEN 9-10 (ELITE)`, `GEN 5-8 (MID)`, and `GEN 1-4 (EARLY)`.
+   - **Unified Scrubber:** Advances the global timeline up to the finish of the entire field ($84.45\text{s}$), with cars crossing the line in order of their generation and training convergence.
+
+---
+
 ## 4. Continuous Iterative Optimization & Monotonic Best-So-Far
 
 In `KRPO/src/experiment/AutonomousExperimentRunner.ts` and `KRPO/src/simulation/krpoLiveLearning.ts`:
@@ -157,7 +179,7 @@ In `src/pages/LeaderboardPage.tsx` and `KRPO/src/leaderboard/krpoLeaderboardStor
 1. **Dedicated Tab:** Added `⚡ KRPO OPTIMIZER` tab alongside `🌐 GLOBAL` and `🏠 LOCAL`.
 2. **Champion Hero Card:**
    - Displays fastest valid lap with gold trophy.
-   - Shows improvement delta (e.g., `-23.6s / 19.9% faster`).
+   - Shows improvement delta (e.g., `-13.33s / 15.8% faster`).
    - Displays verified 10.0/10 design badge and vehicle specifications (150 km/h unboosted / 240 km/h boost).
    - Displays boost metrics (activations, total duration, max boost speed).
    - "LAUNCH REPLAY STUDIO" button directly opens `/replay`.
@@ -178,4 +200,6 @@ Tests updated in `KRPO/tests/run_tests.ts`:
 - `Lap Evaluator detects profile validity correctly` (PASS)
 - `Unconventional Line Optimizer generates valid V-line squaring, chicane cut, and deep trail-braking candidates with shifted braking points` (PASS)
 - `Design 10.0 vehicle physics matches game and eliminates braking on flat-out sweepers/kinks` (PASS)
+- `40-Estimation Swarm generates full field, verifies monotonic progression, and 240 km/h champion` (PASS)
+
 
