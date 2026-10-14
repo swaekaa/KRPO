@@ -11,3 +11,7 @@ export * from './optimizers/GeometricOptimizer';
 export * from './optimizers/PolicyOptimizer';
 export * from './evaluation/LapEvaluator';
 export * from './generate_profiles';
+export * from './simulation/ReplayTypes';
+export * from './simulation/HeadlessSimulator';
+export * from './simulation/controllers/TrajectoryFollower';
+export * from './experiment/AutonomousExperimentRunner';

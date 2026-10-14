@@ -1,0 +1,95 @@
+{
+  "experimentId": "exp-vice-coast-v1",
+  "circuitId": "vice-coast-circuit",
+  "circuitName": "VICE COAST CIRCUIT",
+  "totalRuns": 36,
+  "validRuns": 31,
+  "invalidRuns": 5,
+  "completionRate": 0.86,
+  "baselineLapTime": 178.45,
+  "bestValidLapTime": 164.82,
+  "timeImprovement": 13.63,
+  "percentageImprovement": 7.64,
+  "generations": [
+    {
+      "generation": 0,
+      "bestLapTime": 178.45,
+      "avgLapTime": 178.45,
+      "validCount": 1,
+      "bestPolicyId": "policy-centerline-v1"
+    },
+    {
+      "generation": 1,
+      "bestLapTime": 191.35,
+      "avgLapTime": 198.4,
+      "validCount": 4,
+      "bestPolicyId": "policy-early-candidate"
+    },
+    {
+      "generation": 2,
+      "bestLapTime": 182.15,
+      "avgLapTime": 189.6,
+      "validCount": 5,
+      "bestPolicyId": "policy-g2"
+    },
+    {
+      "generation": 3,
+      "bestLapTime": 174.32,
+      "avgLapTime": 179.8,
+      "validCount": 6,
+      "bestPolicyId": "policy-g3"
+    },
+    {
+      "generation": 4,
+      "bestLapTime": 168.91,
+      "avgLapTime": 173.2,
+      "validCount": 6,
+      "bestPolicyId": "policy-g4"
+    },
+    {
+      "generation": 5,
+      "bestLapTime": 164.82,
+      "avgLapTime": 167.4,
+      "validCount": 6,
+      "bestPolicyId": "policy-krpo-mcp-v1"
+    }
+  ],
+  "archivedRuns": [
+    {
+      "runId": "run-001-baseline",
+      "runType": "baseline",
+      "generation": 0,
+      "lapTime": 178.45,
+      "isValid": true,
+      "avgSpeedKmh": 68.2,
+      "collisionCount": 0
+    },
+    {
+      "runId": "run-002-early",
+      "runType": "early_candidate",
+      "generation": 1,
+      "lapTime": 191.35,
+      "isValid": true,
+      "avgSpeedKmh": 63.6,
+      "collisionCount": 2
+    },
+    {
+      "runId": "run-003-collision",
+      "runType": "failed",
+      "generation": 2,
+      "lapTime": 205.18,
+      "isValid": false,
+      "avgSpeedKmh": 59.3,
+      "collisionCount": 7
+    },
+    {
+      "runId": "run-036-best",
+      "runType": "best",
+      "generation": 5,
+      "lapTime": 164.82,
+      "isValid": true,
+      "avgSpeedKmh": 73.8,
+      "collisionCount": 0
+    }
+  ]
+}
