@@ -19,3 +19,4 @@ export * from './design/krpoAuthoritativeDesign';
 export * from './leaderboard/krpoLeaderboardStore';
 export * from './simulation/krpoLiveLearning';
 export * from './simulation/krpoReplayStore';
+export * from './optimizers/UnconventionalLineOptimizer';

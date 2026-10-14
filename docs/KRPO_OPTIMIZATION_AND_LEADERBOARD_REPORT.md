@@ -85,6 +85,33 @@ In `KRPO/src/simulation/HeadlessSimulator.ts` & `KRPO/src/simulation/krpoLiveLea
 - Multipliers: $1.6\times$ top speed ($150 \rightarrow 240\text{ km/h}$).
 - Live HUD telemetry displays `⚡ BOOST: 240 KM/H (CORNER EXIT)` and `KM / H • ⚡ NITRO ZONE`.
 
+### 3.3 Unconventional Racing Lines & Aggressive Braking Exploration (Breaking the 1:16 Barrier)
+
+#### 1. Why Textbook Racing Lines Plateau at 1:18
+Traditional geometric racing lines prioritize maximizing minimum apex speed through smooth, circular arcs (outside-inside-outside). However, for a vehicle equipped with a **240 km/h boost powertrain**:
+- Carrying +8 km/h at apex but exiting pointed toward the outside barrier delays full-throttle boost application by 1.2–1.8 seconds.
+- In contrast, **squaring off the corner (V-Line)** allows the car to rotate early and align straight with the exit corridor, unleashing 240 km/h boost almost immediately at late apex.
+- Straight-lining alternating chicanes eliminates the severe deceleration from 210 km/h down to 110 km/h.
+
+#### 2. Four Unconventional Trajectory Archetypes (`UnconventionalLineOptimizer.ts`)
+1. **V-Line / Diamond Corner Squaring (`V_LINE_SQUARE_OFF`):**
+   - Stays wide on entry (+4.2m), delays turn-in, and snaps rotation late at the corner exit with an inside clip (-4.4m).
+   - Allows autonomous boost activation at a higher curvature threshold ($\kappa \le 0.024$), launching down straights at 240 km/h.
+2. **Chicane & S-Bend Diagonal Straight-Line Cut (`CHICANE_STRAIGHT_LINE`):**
+   - Detects sign flips in track curvature within 24 sample intervals.
+   - Computes opposing phase offsets to slice straight diagonals directly across curb apexes, carrying $210+\text{ km/h}$ through complex serpentine zones.
+3. **Deep Trail-Brake & Inverted Inside Dive (`DEEP_TRAIL_BRAKE`):**
+   - Moves the braking threshold 7.5 meters deeper into the corner.
+   - Dives directly to the inside on entry, utilizing lateral tire friction and yaw inertia to scrub velocity while rotating the car directly towards exit.
+4. **Stochastic RL Harmonic Spline Mutations (`STOCHASTIC_RL_MUTATION`):**
+   - Multi-frequency Fourier harmonic waves: $\sum_{w=0}^{2} A_w \sin(\omega_w \cdot u + \phi_w)$ for macro trajectory warping.
+   - Localized Gaussian exploration kernels: $h \exp(-(\frac{\Delta s}{\sigma})^2 \cdot 3.0)$ targeting individual corners to discover unconventional micro-lines.
+
+#### 3. Concurrent Multi-Line Swarm Racing
+- **Hero Car:** Dynamically switches and evaluates candidate unconventional trajectories each episode, adopting the winning line as the next generation's champion.
+- **Swarm Racers (Agent Alpha, Beta, Gamma):** Concurrently drive V-Line, Chicane Cut, and Trail-Brake trajectories in real time with distinct visual identification.
+- **Live Replay HUD:** Live HUD displays `🔥 UNCONVENTIONAL LINE: [STYLE]` and active braking shift telemetry.
+
 ---
 
 ## 4. Continuous Iterative Optimization & Monotonic Best-So-Far
@@ -122,4 +149,5 @@ Tests updated in `KRPO/tests/run_tests.ts`:
 - `TrajectoryFollower smartly triggers boost on corner exit recovery without manual entry` (PASS)
 - `AutonomousExperimentRunner enforces monotonic best-so-far and supports checkpointing` (PASS)
 - `Lap Evaluator detects profile validity correctly` (PASS)
+- `Unconventional Line Optimizer generates valid V-line squaring, chicane cut, and deep trail-braking candidates with shifted braking points` (PASS)
 

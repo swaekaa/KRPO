@@ -15,6 +15,7 @@ import { HeadlessSimulator } from '../src/simulation/HeadlessSimulator';
 import { TrajectoryFollower } from '../src/simulation/controllers/TrajectoryFollower';
 import { AutonomousExperimentRunner } from '../src/experiment/AutonomousExperimentRunner';
 import { liveOptimizer } from '../src/simulation/krpoLiveLearning';
+import { generateUnconventionalCandidates } from '../src/optimizers/UnconventionalLineOptimizer';
 
 interface TestResult {
   name: string;
@@ -277,6 +278,24 @@ test('Live optimizer continues open-ended evolution and surpasses human referenc
   assert(snapshot.maxEpisodesPerGen === 4, 'Episodes per generation must be 4');
   assert(snapshot.baselineLapTime <= 85.0, `Baseline lap time must be ~84.45s (01:24.45), got ${snapshot.baselineLapTime}s`);
   assert(snapshot.bestLapTime <= 78.5, `Starting best lap time must be <= 78.50s (01:18.50), got ${snapshot.bestLapTime}s`);
+});
+
+// 13. Unconventional Racing Lines & Braking Exploration Tests
+test('UnconventionalLineOptimizer generates distinct V-Line, chicane cuts, and stochastic spline mutations', () => {
+  const candidates = generateUnconventionalCandidates(1);
+  assert(candidates.length === 4, `Expected 4 unconventional candidates, got ${candidates.length}`);
+  
+  const vLine = candidates.find(c => c.style === 'V_LINE_SQUARE_OFF');
+  assert(vLine !== undefined, 'V_LINE_SQUARE_OFF candidate must exist');
+  assert(vLine!.offsets.length === 500, 'Offsets must contain 500 samples');
+  assert(vLine!.brakingOffsetMeters < 0, 'V-Line must shift braking deeper (negative offset)');
+  
+  const chicaneCut = candidates.find(c => c.style === 'CHICANE_STRAIGHT_LINE');
+  assert(chicaneCut !== undefined, 'CHICANE_STRAIGHT_LINE candidate must exist');
+  assert(chicaneCut!.cornerSpeedBias > 1.0, 'Chicane cut must increase corner speed bias');
+
+  const snapshot = liveOptimizer.getSnapshot();
+  assert(snapshot.unconventionalStyle !== undefined, 'Live snapshot must track unconventionalStyle');
 });
 
 console.log('\n--- Test Results Summary ---');

@@ -2,13 +2,23 @@ import * as THREE from 'three';
 import { extractTrackGeometry, ROAD_WIDTH, MAX_LEGAL_OFFSET } from '../track/TrackExtractor';
 import { krpoLeaderboardStore } from '../leaderboard/krpoLeaderboardStore';
 import { KRPO_10_VEHICLE_CONFIG, KRPO_10_UNBOOSTED_SPEED_MS, KRPO_10_BOOSTED_SPEED_MS } from '../physics/VehicleDynamics';
+import {
+  type UnconventionalLineCandidate,
+  type UnconventionalStyle,
+  generateUnconventionalCandidates,
+  generateVLineSquareOffOffsets,
+  generateChicaneStraightLineOffsets,
+  generateDeepTrailBrakeOffsets,
+} from '../optimizers/UnconventionalLineOptimizer';
 
 // ============================================================
 // KRPO Live Real-Time Continuous Evolutionary Policy Optimizer
-// Open-ended, lifelong autonomous optimization engine.
-// Never stops improving: mutates policy weights, late braking points,
-// apex momentum retention, and corner-exit boost triggers to
-// continuously break past 1:18 and crush human records (1:16 -> 1:12).
+// Open-ended, lifelong autonomous optimization engine with
+// UNCONVENTIONAL RACING LINES & BRAKING EXPLORATION:
+// - V-Line Diamond Late Apex (squares off corners to maximize boost run-up)
+// - Chicane & S-Bend Diagonal Straight-Lining (slices curbs at 210+ km/h)
+// - Deep Trail-Brake & Inverted Dive-Bomb (brakes late into turns)
+// - Stochastic RL Harmonic Spline Mutations (Fourier & Gaussian exploration)
 // ============================================================
 
 export interface PolicyGenome {
@@ -79,6 +89,9 @@ export interface LiveOptimizerSnapshot {
   latestSplitDiff: number | null;
   autonomousBoostActive: boolean;
   cornerBrakingTelemetry: CornerBrakingTelemetry[];
+  unconventionalStyle?: string;
+  unconventionalDescription?: string;
+  brakingPointShiftMeters?: number;
 }
 
 class LiveOptimizerService {
@@ -94,8 +107,8 @@ class LiveOptimizerService {
   private collisionCooldown: number = 0;
 
   // Active baseline & best records (seconds)
-  // Baseline ~ 84.4s (1:24.4) without boost on centerline
-  // Starting best ~ 78.5s (1:18.5) -> rapidly evolves down to sub-1:16 (1:15, 1:13, 1:11)
+  // Baseline ~ 84.45s (01:24.45) without boost on centerline
+  // Starting best ~ 78.50s (01:18.50) -> continuously breaks past 1:16 down to sub-1:12
   private baselineLapTime: number = 84.45;
   private bestLapTime: number = 78.50;
 
@@ -106,18 +119,28 @@ class LiveOptimizerService {
   private lapBoostTime: number = 0;
   private wasBoosting: boolean = false;
 
-  private recentEvent: string | null = 'KRPO Autonomous Optimizer Initialized. Targeting sub-1:16 breakthrough!';
+  private recentEvent: string | null = 'KRPO Unconventional Explorer Initialized. Targeting sub-1:16 breakthrough!';
   private eventTimer: number = 0;
   private latestSplitDiff: number | null = null;
 
+  // Unconventional Line Candidates for current generation
+  private championOffsets: number[] = generateVLineSquareOffOffsets();
+  private candidates: UnconventionalLineCandidate[] = generateUnconventionalCandidates(1);
+  private currentCandidate: UnconventionalLineCandidate = this.candidates[0];
+
+  // Swarm offline trajectory lines
+  private vLineSwarmOffsets: number[] = generateVLineSquareOffOffsets();
+  private chicaneCutSwarmOffsets: number[] = generateChicaneStraightLineOffsets();
+  private trailBrakeSwarmOffsets: number[] = generateDeepTrailBrakeOffsets();
+
   // Champion Genome (evolves monotonically and continuously)
   private championGenome: PolicyGenome = {
-    name: 'Champion Policy Gen 1',
-    cornerBrakingFactor: 14.5,
-    lineOffsetScale: 0.75,
-    boostExitCurvature: 0.014,
-    brakingAggression: 1.0,
-    apexSpeedMultiplier: 1.04,
+    name: 'Champion Unconventional Line Gen 1',
+    cornerBrakingFactor: 13.5,
+    lineOffsetScale: 1.0,
+    boostExitCurvature: 0.016,
+    brakingAggression: 1.1,
+    apexSpeedMultiplier: 1.06,
   };
 
   // Active Candidate Genome for current episode
@@ -126,9 +149,9 @@ class LiveOptimizerService {
   // Corner Braking Self-Testing Records (10 sectors/corners around track)
   private cornerTelemetry: CornerBrakingTelemetry[] = Array.from({ length: 10 }, (_, i) => ({
     cornerIndex: i,
-    entrySpeedKmh: 145,
-    apexSpeedKmh: 82,
-    exitSpeedKmh: 135,
+    entrySpeedKmh: 152,
+    apexSpeedKmh: 86,
+    exitSpeedKmh: 142,
     brakingMarginMeters: 3.5,
     status: 'OPTIMAL',
   }));
@@ -145,11 +168,11 @@ class LiveOptimizerService {
     },
   ];
 
-  // Swarm candidate configurations (3 parallel exploratory policies)
+  // Swarm candidate configurations (3 parallel exploratory policies testing distinct unconventional styles)
   private swarmConfigs = [
-    { id: 'cand-a', name: 'Agent Alpha (Late Braker / Aggressive Boost)', color: '#FF3366', speedBias: 1.05, offsetMult: 1.15, phase: 0.0 },
-    { id: 'cand-b', name: 'Agent Beta (Optimal Geometric Apex Line)', color: '#00E5FF', speedBias: 1.02, offsetMult: 0.95, phase: -1.2 },
-    { id: 'cand-c', name: 'Agent Gamma (Smooth High-G Apex Retention)', color: '#FFD700', speedBias: 0.98, offsetMult: 0.75, phase: -2.5 },
+    { id: 'cand-a', name: 'Agent Alpha (V-Line Squaring)', color: '#FF3366', speedBias: 1.05, style: 'V-Line' },
+    { id: 'cand-b', name: 'Agent Beta (Chicane Cut-Through)', color: '#00E5FF', speedBias: 1.03, style: 'Chicane Cut' },
+    { id: 'cand-c', name: 'Agent Gamma (Deep Trail-Brake Dive)', color: '#FFD700', speedBias: 0.99, style: 'Trail Brake' },
   ];
 
   public setSpeedMultiplier(mult: number) {
@@ -181,7 +204,7 @@ class LiveOptimizerService {
   }
 
   public triggerCrashTest() {
-    this.recentEvent = '⚠️ BRAKE FAILURE INJECTION: Forcing late turn-in at 215 km/h to test wall recovery!';
+    this.recentEvent = '⚠️ UNCONVENTIONAL OVERCOOK TEST: Testing late turn-in dive at 225 km/h to evaluate wall recovery!';
     this.eventTimer = 3.5;
     this.collisionCooldown = 1.8;
     this.collisionCount += 2;
@@ -235,23 +258,21 @@ class LiveOptimizerService {
       }
     }
 
-    // Kinematic Stopping Distance: d_stop = (v^2 - v_apex^2) / (2 * a_brake)
+    // Kinematic Stopping Distance adjusted by unconventional late braking aggression
     const currentSpeedEstimate = this.autonomousBoostEngaged ? KRPO_10_BOOSTED_SPEED_MS : KRPO_10_UNBOOSTED_SPEED_MS;
     const cornerIndex = Math.min(9, Math.floor(clampedProgress * 10));
     const telemetry = this.cornerTelemetry[cornerIndex];
-    const brakingMargin = telemetry.brakingMarginMeters / this.currentGenome.brakingAggression;
-
-    const targetApexSpeed = Math.max(20.0, (40.0 * this.currentGenome.apexSpeedMultiplier) / (1.0 + upcomingApexKappa * this.currentGenome.cornerBrakingFactor));
-    const stoppingDistReq = ((currentSpeedEstimate * currentSpeedEstimate - targetApexSpeed * targetApexSpeed) / (2 * 28.0)) + brakingMargin;
+    
+    // Unconventional late braking: shifts braking distance deeper by candidate's offset
+    const shiftedBrakingMargin = Math.max(1.0, telemetry.brakingMarginMeters + this.currentCandidate.brakingOffsetMeters * 0.4);
+    const targetApexSpeed = Math.max(22.0, (42.0 * this.currentGenome.apexSpeedMultiplier) / (1.0 + upcomingApexKappa * this.currentGenome.cornerBrakingFactor));
+    const stoppingDistReq = ((currentSpeedEstimate * currentSpeedEstimate - targetApexSpeed * targetApexSpeed) / (2 * 28.0)) + shiftedBrakingMargin;
 
     // ── SMART AUTONOMOUS BOOST RECOVERABILITY ──
-    // The car fires boost autonomously whenever:
-    // 1) It has cleared the apex and curvature drops below the evolved boost threshold (up to 0.022 in advanced gens)
-    // 2) Distance to next corner braking zone > stoppingDistReq + 6.0m
-    // 3) Car has boost reserve > 0.01
-    // 4) Not in a crash cooldown
-    const isSafeStraightAhead = distToUpcomingApex > (stoppingDistReq + 6.0);
-    const isCornerExitRecovered = absKappa < this.currentGenome.boostExitCurvature && this.collisionCooldown <= 0;
+    // In unconventional lines (e.g. V-Line squaring), the car squares off the late apex,
+    // allowing boost to trigger earlier at higher exit curvatures (up to 0.024)
+    const isSafeStraightAhead = distToUpcomingApex > (stoppingDistReq + 5.0);
+    const isCornerExitRecovered = absKappa < this.currentCandidate.boostExitCurvature && this.collisionCooldown <= 0;
     const autonomousBoostTrigger = isSafeStraightAhead && isCornerExitRecovered && this.boostReserve > 0.01;
 
     const isBoosting = (this.manualBoostActive || autonomousBoostTrigger) && this.boostReserve > 0.01;
@@ -262,30 +283,33 @@ class LiveOptimizerService {
       this.lapBoostTime += dt;
       if (!this.wasBoosting) {
         this.lapBoostActivations++;
-        this.recentEvent = `⚡ AUTONOMOUS BOOST: Corner Exit Recovered! Surging to 240 km/h`;
+        this.recentEvent = `⚡ UNCONVENTIONAL BOOST: Exiting via ${this.currentCandidate.style} (240 km/h)!`;
         this.eventTimer = 2.0;
       }
     } else {
       // Regenerative energy recovery (recharges faster during braking zones)
-      const regenRate = absKappa > 0.02 ? 0.22 : 0.14;
+      const regenRate = absKappa > 0.02 ? 0.24 : 0.15;
       this.boostReserve = Math.min(1.0, this.boostReserve + regenRate * dt);
     }
     this.wasBoosting = isBoosting;
 
-    // Dynamic speed based on evolved policy genome:
-    // Unboosted straight top speed = 150 km/h (41.67 m/s)
-    // Boosted top speed = 240 km/h (66.67 m/s) with 1.6x multiplier
+    // Speed calculation from unconventional candidate line:
+    // Straightaways unboosted: reaches ~150 km/h (41.67 m/s)
+    // Straightaways with boost: reaches ~240 km/h (66.67 m/s) with 1.6x multiplier
     const boostMult = isBoosting ? 1.6 : 1.0;
     const baseMaxSpeedMs = KRPO_10_UNBOOSTED_SPEED_MS; // 41.67 m/s
     
-    // Geometric apex clipping reduces effective track curvature
-    const effectiveKappa = Math.max(0, absKappa * (1.0 - Math.min(0.42, this.currentGenome.lineOffsetScale * 0.36)));
+    // Unconventional lines straighten the geometry: effective curvature drops significantly
+    const lineOffsetAtSample = Math.abs(this.currentCandidate.offsets[sampleIdx] || 0);
+    const geometryStraighteningFactor = Math.min(0.48, lineOffsetAtSample * 0.11);
+    const effectiveKappa = Math.max(0, absKappa * (1.0 - geometryStraighteningFactor));
+    
     const cornerSpeedLimit = Math.max(
-      19.0 * this.currentGenome.apexSpeedMultiplier,
+      21.0 * this.currentGenome.apexSpeedMultiplier,
       (baseMaxSpeedMs * this.currentGenome.apexSpeedMultiplier) / (1.0 + effectiveKappa * this.currentGenome.cornerBrakingFactor)
     );
     
-    let activeSpeedMs = Math.min(KRPO_10_BOOSTED_SPEED_MS, cornerSpeedLimit * boostMult);
+    let activeSpeedMs = Math.min(KRPO_10_BOOSTED_SPEED_MS, cornerSpeedLimit * boostMult * this.currentCandidate.cornerSpeedBias);
     if (this.collisionCooldown > 0) activeSpeedMs *= 0.55; // crash slowdown
 
     // Track sector progress (3380.0m total track length)
@@ -309,7 +333,7 @@ class LiveOptimizerService {
       this.latestSplitDiff = Math.round((this.simTime - baselineSplitTime) * 100) / 100;
 
       if (this.latestSplitDiff < 0) {
-        this.recentEvent = `⚡ Split ${this.currentCheckpoint}/${numCP} • Delta: ${this.latestSplitDiff}s (FAST)`;
+        this.recentEvent = `⚡ Split ${this.currentCheckpoint}/${numCP} • Delta: ${this.latestSplitDiff}s (${this.currentCandidate.style})`;
       } else {
         this.recentEvent = `Split ${this.currentCheckpoint}/${numCP} • Delta: +${this.latestSplitDiff}s`;
       }
@@ -340,7 +364,7 @@ class LiveOptimizerService {
     krpoLeaderboardStore.recordRun({
       runId: `live-g${this.generation}-e${this.episode}-${Date.now().toString().slice(-4)}`,
       checkpointId: `ckpt-gen${this.generation}-cand${this.episode}`,
-      policyName: `Gen ${this.generation} - ${this.currentGenome.name}`,
+      policyName: `Gen ${this.generation} - ${this.currentCandidate.name}`,
       generation: this.generation,
       episode: this.episode,
       lapTime,
@@ -364,18 +388,19 @@ class LiveOptimizerService {
 
     if (isNewBest) {
       this.bestLapTime = lapTime;
-      // Adopt this winning candidate as new champion genome
-      this.championGenome = { ...this.currentGenome, name: `Champion Gen ${this.generation}` };
+      // Adopt this winning unconventional line into champion offsets!
+      this.championOffsets = [...this.currentCandidate.offsets];
+      this.championGenome = { ...this.currentGenome, name: `Champion Gen ${this.generation} (${this.currentCandidate.style})` };
 
       if (lapTime < 76.0) {
-        this.recentEvent = `🏆 NEW RECORD: ${formatTime(lapTime)}! (Crushed 1:16 goal! Gen ${this.generation}.${this.episode})`;
+        this.recentEvent = `🏆 NEW ALL-TIME RECORD: ${formatTime(lapTime)}! (Crushed 1:16 goal with ${this.currentCandidate.style}!)`;
       } else {
-        this.recentEvent = `🏆 NEW RECORD: ${formatTime(lapTime)} (Saved -${(this.baselineLapTime - lapTime).toFixed(2)}s)`;
+        this.recentEvent = `🏆 NEW RECORD: ${formatTime(lapTime)} via ${this.currentCandidate.style} (Saved -${(this.baselineLapTime - lapTime).toFixed(2)}s)`;
       }
     } else if (!isValid) {
       this.recentEvent = `❌ Episode Invalid: ${this.collisionCount} Wall Contacts. Mutating braking points earlier...`;
     } else {
-      this.recentEvent = `Lap: ${formatTime(lapTime)}. Fitness evaluated: continuing search...`;
+      this.recentEvent = `Lap: ${formatTime(lapTime)} (${this.currentCandidate.style}). Exploring next line mutation...`;
     }
     this.eventTimer = 3.5;
 
@@ -385,7 +410,7 @@ class LiveOptimizerService {
         t.brakingMarginMeters = Math.min(7.0, t.brakingMarginMeters + 0.8);
         t.status = 'OVERCOOKED_CORRECTED';
       } else {
-        t.brakingMarginMeters = Math.max(1.5, t.brakingMarginMeters - 0.25);
+        t.brakingMarginMeters = Math.max(1.2, t.brakingMarginMeters - 0.25);
         t.status = 'TESTING_DEEPER';
       }
     });
@@ -397,9 +422,9 @@ class LiveOptimizerService {
       bestLapTime: lapTime,
       avgSpeedKmh: avgSpeed,
       isValid,
-      policyName: `Gen ${this.generation}.${this.episode} - ${this.currentGenome.name}`,
+      policyName: `Gen ${this.generation}.${this.episode} - ${this.currentCandidate.name}`,
       notes: isValid 
-        ? (isNewBest ? (lapTime < 76.0 ? 'Sub-1:16 breakthrough record' : 'New champion apex policy') : 'Valid exploration') 
+        ? (isNewBest ? (lapTime < 76.0 ? `Sub-1:16 breakthrough via ${this.currentCandidate.style}` : `New record with ${this.currentCandidate.style}`) : 'Valid exploration') 
         : 'Wall contact penalty',
     });
 
@@ -426,69 +451,33 @@ class LiveOptimizerService {
   }
 
   /**
-   * Continuous Open-Ended Mutation Strategy:
-   * Explores parameter perturbations every single episode and generation without stopping.
+   * Continuous Open-Ended Unconventional Mutation Strategy:
+   * Explores distinct racing line archetypes (V-Line, Chicane Cut, Trail-Brake, Stochastic Spline)
+   * every single episode and generation without stopping.
    */
   private mutateCandidatePolicy() {
-    // Base parameters steadily evolve each generation toward hyper-optimal limits
-    const genProgress = Math.min(1.0, this.generation / 12.0);
+    this.candidates = generateUnconventionalCandidates(this.generation, this.championOffsets);
+    const candidateIndex = (this.episode - 1) % this.candidates.length;
+    this.currentCandidate = this.candidates[candidateIndex];
 
-    // Evolve champion baseline:
-    // - cornerBrakingFactor decreases from 14.5 down to 7.5 (carries far more corner speed)
-    // - lineOffsetScale increases from 0.75 up to 1.15 (optimal geometric apex clipping)
-    // - boostExitCurvature increases from 0.014 up to 0.022 (earlier boost launch out of turns)
-    // - apexSpeedMultiplier increases from 1.04 up to 1.25
-    const baseBrakingFactor = Math.max(7.2, 14.5 - genProgress * 7.3);
-    const baseOffsetScale   = Math.min(1.15, 0.75 + genProgress * 0.40);
-    const baseBoostCurv     = Math.min(0.022, 0.014 + genProgress * 0.008);
-    const baseApexRet       = Math.min(1.25, 1.04 + genProgress * 0.21);
+    const genProgress = Math.min(1.0, this.generation / 10.0);
+    const baseBrakingFactor = Math.max(5.8, 13.5 - genProgress * 7.5);
 
-    // Explore 4 distinct tactical specializations per generation
-    if (this.episode === 1) {
-      // Late Braking Specialist: pushes braking threshold 2-3m deeper
-      this.currentGenome = {
-        name: 'Late Braking & Straightaway Run-up',
-        cornerBrakingFactor: baseBrakingFactor,
-        lineOffsetScale: baseOffsetScale,
-        boostExitCurvature: baseBoostCurv,
-        brakingAggression: 1.15 + genProgress * 0.25,
-        apexSpeedMultiplier: baseApexRet,
-      };
-    } else if (this.episode === 2) {
-      // Early Apex Boost Power-Out: fires boost right at apex exit
-      this.currentGenome = {
-        name: 'Early Apex Boost Power-Out',
-        cornerBrakingFactor: baseBrakingFactor + 0.5,
-        lineOffsetScale: baseOffsetScale,
-        boostExitCurvature: baseBoostCurv + 0.003,
-        brakingAggression: 1.0,
-        apexSpeedMultiplier: baseApexRet + 0.03,
-      };
-    } else if (this.episode === 3) {
-      // High-G Corner Momentum Retention: takes sweepers at high speed
-      this.currentGenome = {
-        name: 'High-G Apex Momentum Retention',
-        cornerBrakingFactor: Math.max(6.5, baseBrakingFactor - 1.2),
-        lineOffsetScale: baseOffsetScale + 0.05,
-        boostExitCurvature: baseBoostCurv,
-        brakingAggression: 1.05,
-        apexSpeedMultiplier: baseApexRet + 0.06,
-      };
-    } else {
-      // Micro-Straightened Geometric Corridor: maximizes track width to flatten hairpins
-      this.currentGenome = {
-        name: 'Micro-Straightened Geometric Line',
-        cornerBrakingFactor: baseBrakingFactor - 0.5,
-        lineOffsetScale: Math.min(1.18, baseOffsetScale + 0.08),
-        boostExitCurvature: baseBoostCurv + 0.002,
-        brakingAggression: 1.1,
-        apexSpeedMultiplier: baseApexRet + 0.04,
-      };
-    }
+    this.currentGenome = {
+      name: this.currentCandidate.name,
+      cornerBrakingFactor: baseBrakingFactor / this.currentCandidate.cornerSpeedBias,
+      lineOffsetScale: 1.0,
+      boostExitCurvature: this.currentCandidate.boostExitCurvature,
+      brakingAggression: 1.1 + (this.currentCandidate.brakingOffsetMeters < -5 ? 0.25 : 0.1),
+      apexSpeedMultiplier: 1.05 + genProgress * 0.22,
+    };
+
+    this.recentEvent = `⚡ TESTING UNCONVENTIONAL: ${this.currentCandidate.name} (Braking Shift: ${this.currentCandidate.brakingOffsetMeters}m)`;
+    this.eventTimer = 3.2;
   }
 
   private evolveNextGeneration() {
-    this.recentEvent = `🧬 EVOLUTION STEP: Generation ${this.generation} Initialized! Propagating champion weights...`;
+    this.recentEvent = `🧬 EVOLUTION STEP: Generation ${this.generation} Initialized! Propagating champion unconventional trajectory...`;
     this.eventTimer = 3.5;
     this.mutateCandidatePolicy();
   }
@@ -511,11 +500,11 @@ class LiveOptimizerService {
     const kappa = (sCurr as any).curvature || 0;
     const absK = Math.abs(kappa);
 
-    // Lateral offset for hero car
-    let lateralOffset = Math.max(-4.5, Math.min(4.5, -kappa * 65.0 * this.currentGenome.lineOffsetScale));
-    if (this.generation === 1 && this.episode === 1) {
-      lateralOffset += Math.sin(this.simTime * 2.0) * 0.4; // initial exploration probe
-    }
+    // ── USE UNCONVENTIONAL TRAJECTORY OFFSETS DIRECTLY ──
+    // Instead of textbook -kappa * 65.0, directly follow the candidate's unconventional line!
+    const unconventionalOffset = this.currentCandidate.offsets[idx] || 0;
+    let lateralOffset = Math.max(-4.5, Math.min(4.5, unconventionalOffset));
+
     if (this.collisionCooldown > 0) {
       lateralOffset = 4.90; // barrier brush
     }
@@ -544,13 +533,16 @@ class LiveOptimizerService {
     const isBoosting = this.autonomousBoostEngaged || (this.manualBoostActive && this.boostReserve > 0.01);
     const boostMult = isBoosting ? 1.6 : 1.0;
 
-    const baseMaxSpeedMs = KRPO_10_UNBOOSTED_SPEED_MS; // 41.67 m/s (150 km/h)
-    const effectiveKappa = Math.max(0, absK * (1.0 - Math.min(0.42, this.currentGenome.lineOffsetScale * 0.36)));
-    const cornerLimitMs = Math.max(
-      19.0 * this.currentGenome.apexSpeedMultiplier,
+    const baseMaxSpeedMs = KRPO_10_UNBOOSTED_SPEED_MS; // 41.67 m/s
+    const lineOffsetAtSample = Math.abs(this.currentCandidate.offsets[idx] || 0);
+    const geometryStraighteningFactor = Math.min(0.48, lineOffsetAtSample * 0.11);
+    const effectiveKappa = Math.max(0, absK * (1.0 - geometryStraighteningFactor));
+
+    const cornerSpeedLimit = Math.max(
+      21.0 * this.currentGenome.apexSpeedMultiplier,
       (baseMaxSpeedMs * this.currentGenome.apexSpeedMultiplier) / (1.0 + effectiveKappa * this.currentGenome.cornerBrakingFactor)
     );
-    let speedMs = Math.min(KRPO_10_BOOSTED_SPEED_MS, cornerLimitMs * boostMult);
+    let speedMs = Math.min(KRPO_10_BOOSTED_SPEED_MS, cornerSpeedLimit * boostMult * this.currentCandidate.cornerSpeedBias);
 
     if (this.collisionCooldown > 0) speedMs *= 0.55;
 
@@ -560,7 +552,7 @@ class LiveOptimizerService {
 
     const heroCar: LiveCandidateState = {
       id: 'hero-candidate',
-      name: `Policy Gen ${this.generation}.${this.episode} (${this.currentGenome.name})`,
+      name: `Policy Gen ${this.generation}.${this.episode} (${this.currentCandidate.style})`,
       color: '#00F0FF',
       position: pos,
       rotationY: rotY,
@@ -576,9 +568,9 @@ class LiveOptimizerService {
       checkpointIndex: this.currentCheckpoint,
     };
 
-    // Swarm candidates
-    const swarmCandidates: LiveCandidateState[] = this.swarmConfigs.map((cfg) => {
-      const swarmProgress = (clampedProgress + cfg.phase * 0.018 + 1.0) % 1.0;
+    // Swarm candidates concurrently driving distinct unconventional lines!
+    const swarmCandidates: LiveCandidateState[] = this.swarmConfigs.map((cfg, i) => {
+      const swarmProgress = (clampedProgress + (i + 1) * 0.022 + 1.0) % 1.0;
       const sFrac = swarmProgress * n;
       const sIdx = Math.floor(sFrac) % n;
       const sNextIdx = (sIdx + 1) % n;
@@ -586,9 +578,11 @@ class LiveOptimizerService {
 
       const scCurr = samples[sIdx];
       const scNext = samples[sNextIdx];
-      const scKappa = (scCurr as any).curvature || 0;
 
-      const swarmOffset = Math.max(-4.4, Math.min(4.4, -scKappa * 60.0 * cfg.offsetMult + Math.sin(this.simTime * 1.5 + cfg.phase) * 0.4));
+      // Assign distinct unconventional trajectory to each swarm car
+      const swarmOffsets = i === 0 ? this.vLineSwarmOffsets : i === 1 ? this.chicaneCutSwarmOffsets : this.trailBrakeSwarmOffsets;
+      const swarmOffset = Math.max(-4.4, Math.min(4.4, swarmOffsets[sIdx] || 0));
+
       const sBasePos = new THREE.Vector3(scCurr.position.x, 0, scCurr.position.z).lerp(
         new THREE.Vector3(scNext.position.x, 0, scNext.position.z),
         sSubFrac
@@ -651,11 +645,14 @@ class LiveOptimizerService {
       baselineLapTime: this.baselineLapTime,
       timeImprovement: Math.round((this.baselineLapTime - this.bestLapTime) * 100) / 100,
       generationHistory: [...this.generationHistory],
-      activePolicyName: `Gen ${this.generation}.${this.episode} (${this.currentGenome.name})`,
+      activePolicyName: `Gen ${this.generation}.${this.episode} (${this.currentCandidate.name})`,
       recentEvent: this.recentEvent,
       latestSplitDiff: this.latestSplitDiff,
       autonomousBoostActive: this.autonomousBoostEngaged,
       cornerBrakingTelemetry: [...this.cornerTelemetry],
+      unconventionalStyle: this.currentCandidate.style,
+      unconventionalDescription: this.currentCandidate.description,
+      brakingPointShiftMeters: this.currentCandidate.brakingOffsetMeters,
     };
   }
 }
