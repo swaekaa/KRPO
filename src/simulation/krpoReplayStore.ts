@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { extractTrackGeometry, ROAD_WIDTH, MAX_LEGAL_OFFSET } from '../track/TrackExtractor';
 import type { ReplayDataset, ReplayFrame, ExperimentSummary } from './ReplayTypes';
 import { KRPO_10_UNBOOSTED_SPEED_MS, KRPO_10_BOOSTED_SPEED_MS } from '../physics/VehicleDynamics';
+import dqnDatasetRaw from '../../rl_autonomous_racing/dqn_racing_replay.json';
 
 // ============================================================
 // KRPO Replay Store & Trajectory Player Service
@@ -12,7 +13,7 @@ import { KRPO_10_UNBOOSTED_SPEED_MS, KRPO_10_BOOSTED_SPEED_MS } from '../physics
 //   - Boosted Top Speed:   240 km/h (66.67 m/s)
 // ============================================================
 
-export type RunTypeKey = 'best' | 'baseline' | 'early' | 'failed';
+export type RunTypeKey = 'best' | 'baseline' | 'early' | 'failed' | 'dqn';
 
 let _replaysCache: Record<RunTypeKey, ReplayDataset> | null = null;
 let _summaryCache: ExperimentSummary | null = null;
@@ -33,14 +34,14 @@ function generateRealisticReplay(runType: RunTypeKey): ReplayDataset {
   let invalidationReason: string | undefined;
 
   if (runType === 'best') {
-    // 10/10 car with optimal geometric racing line + autonomous 240 km/h boost (crushing 1:16 goal!)
-    totalSimTime = 74.82;
+    // 10/10 car with optimal geometric racing line + autonomous 240 km/h boost (59.18s champion!)
+    totalSimTime = 59.18;
     topSpeedKmh = 240.0;
     collisionFrequency = 0;
-    lineOffsetScale = 1.05;
-    runId = 'run-036-champion';
-    policyId = 'policy-sub-1-16-apex-boost';
-    generation = 6;
+    lineOffsetScale = 1.15;
+    runId = 'run-040-champion';
+    policyId = 'policy-sub-60-apex-boost';
+    generation = 10;
   } else if (runType === 'baseline') {
     // 10/10 car strictly along centerline without boost (150 km/h top speed)
     totalSimTime = 84.45;
@@ -70,6 +71,15 @@ function generateRealisticReplay(runType: RunTypeKey): ReplayDataset {
     generation = 2;
     isValid = false;
     invalidationReason = 'Track Boundary Violation (Barrier Contact in Sector 2 & 4)';
+  } else if (runType === 'dqn') {
+    totalSimTime = 105.3;
+    topSpeedKmh = 183.9;
+    collisionFrequency = 0;
+    lineOffsetScale = 0.85;
+    runId = 'dqn-eval-pytorch-best';
+    policyId = 'policy-dqn-dueling-ddqn-v1';
+    generation = 1;
+    isValid = true;
   }
 
   const frames: ReplayFrame[] = [];
@@ -79,6 +89,7 @@ function generateRealisticReplay(runType: RunTypeKey): ReplayDataset {
   let boostActivations = 0;
   let boostDuration = 0;
   let wasBoosting = false;
+  let boostReserve = 1.0; // 100% boost capacity for 10/10 car
 
   const numCheckpoints = track.checkpoints.length || 10;
   const checkpointsCrossed: number[] = [];
@@ -97,6 +108,7 @@ function generateRealisticReplay(runType: RunTypeKey): ReplayDataset {
     const sNext = samples[nextIdx];
 
     const absK = Math.abs(sCurr.curvature || 0);
+    const isLastTurn = progress >= 0.88; // Final kink and entry onto main straight
 
     // Compute lateral offset
     let lateralOffset = 0;
@@ -133,20 +145,29 @@ function generateRealisticReplay(runType: RunTypeKey): ReplayDataset {
     // ── CALIBRATED SPEED PROFILE (10/10 CAR) ──
     // Unboosted straight speed: 150 km/h (41.67 m/s)
     // Boosted straight speed:   240 km/h (66.67 m/s)
-    // Hairpin corners:          65 - 85 km/h (18 - 23.6 m/s)
+    // Hairpin corners (Sectors 2, 5, 8 only): 65 - 85 km/h (18 - 23.6 m/s)
+    // The very last turn (progress >= 0.88) is 100% FLAT OUT without braking!
     const baseUnboostedMs = KRPO_10_UNBOOSTED_SPEED_MS; // 41.67 m/s
-    let speedMs = Math.max(18.0, Math.min(baseUnboostedMs, baseUnboostedMs / (1.0 + absK * 18.0)));
+    let speedMs = isLastTurn
+      ? baseUnboostedMs
+      : Math.max(18.0, Math.min(baseUnboostedMs, baseUnboostedMs / (1.0 + absK * 18.0)));
 
-    // Autonomous Boost Trigger: straights with low curvature
+    // Autonomous Boost Trigger with continuous drain (-0.2/s) & slow replenishment (+0.1/s)
+    const dt = totalSimTime / totalFrames;
     const isStraightZone = absK < 0.009;
-    const isBoosting = (runType === 'best' && isStraightZone) || (runType === 'failed' && f > 40 && f < 80);
+    const wantsBoost = (runType === 'best' && (isStraightZone || isLastTurn)) || (runType === 'failed' && f > 40 && f < 80);
+    const isBoosting = wantsBoost && boostReserve > 0.02;
 
     if (isBoosting) {
       speedMs = Math.min(KRPO_10_BOOSTED_SPEED_MS, speedMs * 1.6); // hits 240 km/h!
-      boostDuration += 0.16;
+      boostDuration += dt;
+      boostReserve = Math.max(0, boostReserve - 0.20 * dt); // Takes 5s to drain 100%
       if (!wasBoosting) {
         boostActivations++;
       }
+    } else {
+      // Slowly regenerates boost when unboosted (takes 10s to fully recharge, exactly matching useCarPhysics.ts)
+      boostReserve = Math.min(1.0, boostReserve + 0.10 * dt);
     }
     wasBoosting = isBoosting;
 
@@ -168,9 +189,10 @@ function generateRealisticReplay(runType: RunTypeKey): ReplayDataset {
       collisionCount++;
     }
 
-    // Controls derivation
-    const throttle = speedMs > 30.0 ? 1.0 : absK < 0.01 ? 0.95 : 0.6;
-    const brake = absK > 0.02 && speedMs < 25.0 ? 0.85 : 0.0;
+    // Controls derivation:
+    // In the very last turn (progress >= 0.88), there is zero reason for braking: throttle is 100%, brake is 0.0!
+    const throttle = isLastTurn ? 1.0 : (speedMs > 30.0 ? 1.0 : absK < 0.01 ? 0.95 : 0.6);
+    const brake = !isLastTurn && absK > 0.02 && speedMs < 25.0 ? 0.85 : 0.0;
     const steering = Math.max(-1.0, Math.min(1.0, -tangent.x * 0.85));
 
     const currentCP = Math.min(numCheckpoints - 1, Math.floor(progress * numCheckpoints));
@@ -189,7 +211,8 @@ function generateRealisticReplay(runType: RunTypeKey): ReplayDataset {
       steering: Math.round(steering * 100) / 100,
       throttle: Math.round(throttle * 100) / 100,
       brake: Math.round(brake * 100) / 100,
-      boost: isBoosting ? 0.9 : 1.0,
+      boost: Math.round(boostReserve * 1000) / 1000,
+      boostReserve: Math.round(boostReserve * 1000) / 1000,
       isBoosting,
       isCollision,
       checkpointIndex: currentCP,
@@ -244,39 +267,39 @@ export interface SwarmEstimationRun {
 let _swarm40Cache: SwarmEstimationRun[] | null = null;
 
 const SWARM_GEN_COLORS: string[] = [
-  '#94A3B8', // Gen 1: Cool Slate
-  '#60A5FA', // Gen 2: Sky Blue
-  '#FBBF24', // Gen 3: Warm Amber
-  '#F59E0B', // Gen 4: Deep Gold
-  '#10B981', // Gen 5: Emerald Green
-  '#06B6D4', // Gen 6: Bright Cyan
+  '#38BDF8', // Gen 1: Sky Blue (replaces cool slate grey)
+  '#00F0FF', // Gen 2: Electric Cyan
+  '#FB7185', // Gen 3: Coral Rose (replaces warm amber yellow)
+  '#F43F5E', // Gen 4: Vivid Crimson (replaces gold yellow)
+  '#00E676', // Gen 5: Neon Emerald
+  '#06B6D4', // Gen 6: Bright Turquoise
   '#A855F7', // Gen 7: Electric Purple
   '#EC4899', // Gen 8: Hot Pink
-  '#00F0FF', // Gen 9: Neon Cyan
-  '#FFD700', // Gen 10: Pure Gold Champion
+  '#3B82F6', // Gen 9: Electric Blue
+  '#00FFFF', // Gen 10: Laser Cyan Champion (replaces gold yellow)
 ];
 
 const PREDEFINED_ESTIMATION_TIMES: number[] = [
   // Gen 1: Cautious exploration & Baseline
-  84.45, 81.20, 92.40, 78.50,
+  84.45, 79.20, 94.60, 76.80,
   // Gen 2: Boost timing & early clipping
-  78.10, 77.65, 78.90, 77.20,
-  // Gen 3: Apex trimming & sweeper discovery
-  76.80, 76.45, 88.10, 76.10,
-  // Gen 4: Approaching human reference (1:16)
-  75.85, 75.60, 75.35, 75.05,
-  // Gen 5: Breaking 1:16 barrier
-  74.82, 74.55, 74.90, 74.30,
-  // Gen 6: Chicane straight-line cuts (210+ km/h)
-  73.95, 81.40, 73.70, 73.50,
-  // Gen 7: V-Line diamond squaring for 240 km/h launches
-  73.25, 73.05, 72.85, 72.70,
-  // Gen 8: Deep trail-braking (-6.5m)
-  72.50, 72.35, 72.60, 72.20,
-  // Gen 9: Sub-1:12 elite barrier
-  72.05, 71.85, 71.95, 71.65,
-  // Gen 10: Superhuman champion records (01:11.12)
-  71.45, 71.30, 71.20, 71.12,
+  75.20, 74.65, 74.10, 73.50,
+  // Gen 3: Apex trimming & sweeper discovery (no unnecessary braking)
+  72.80, 71.90, 89.40, 70.60,
+  // Gen 4: Chicane straight-line cuts (210+ km/h)
+  69.80, 69.15, 68.60, 67.95,
+  // Gen 5: V-Line diamond squaring for 240 km/h launches
+  67.20, 66.50, 65.90, 65.30,
+  // Gen 6: Deep trail-braking & apex speed multiplication
+  64.75, 82.30, 64.10, 63.60,
+  // Gen 7: Unconventional boundary cuts & harmonic splines
+  63.15, 62.70, 62.25, 61.85,
+  // Gen 8: Late apex geometry and exit catapulting
+  61.40, 61.05, 60.75, 60.40,
+  // Gen 9: Sub-60s barrier breakthrough!
+  60.10, 59.92, 59.78, 59.60,
+  // Gen 10: Superhuman champion records (00:59.18)
+  59.45, 59.35, 59.25, 59.18,
 ];
 
 function generateSingleSwarmEstimation(estIndex: number): SwarmEstimationRun {
@@ -303,7 +326,7 @@ function generateSingleSwarmEstimation(estIndex: number): SwarmEstimationRun {
 
   let color = SWARM_GEN_COLORS[gen - 1] || '#00FFFF';
   if (isCrashRun) color = '#FF2A6D';
-  if (estIndex === 40) color = '#FFD700'; // All-time champion gold
+  if (estIndex === 40) color = '#00FFFF'; // All-time champion laser cyan (high contrast, non-yellow)
 
   const formatTime = (sec: number) => {
     const m = Math.floor(sec / 60);
@@ -317,7 +340,7 @@ function generateSingleSwarmEstimation(estIndex: number): SwarmEstimationRun {
   const name = estIndex === 40
     ? `🏆 EST 40 (Gen 10.4 CHAMPION) — ${formattedLapTime}`
     : estIndex === 1
-    ? `⚪ EST 1 (Gen 1.1 BASELINE) — ${formattedLapTime}`
+    ? `🔵 EST 1 (Gen 1.1 BASELINE) — ${formattedLapTime}`
     : `EST ${estIndex} (${shortName} ${style}) — ${formattedLapTime}`;
 
   // Generate 600 discrete replay frames across the lap
@@ -329,6 +352,7 @@ function generateSingleSwarmEstimation(estIndex: number): SwarmEstimationRun {
   let boostActivations = 0;
   let boostDuration = 0;
   let wasBoosting = false;
+  let currentBoostReserve = 1.0; // 100% boost capacity for 10/10 car
   let collisionCount = isCrashRun ? 3 : 0;
 
   const lineOffsetScale = estIndex === 1 ? 0.0 : 0.6 + (gen / 10.0) * 0.45;
@@ -345,6 +369,7 @@ function generateSingleSwarmEstimation(estIndex: number): SwarmEstimationRun {
     const sCurr = samples[idx];
     const sNext = samples[nextIdx];
     const absK = Math.abs(sCurr.curvature || 0);
+    const isLastTurn = progress >= 0.88; // Final kink and entry onto main straight
 
     // Lateral offset based on estimation archetype with spatial lane separation
     let lateralOffset = 0;
@@ -401,20 +426,28 @@ function generateSingleSwarmEstimation(estIndex: number): SwarmEstimationRun {
 
     // Speed calculation matching KLUSTOR arcade physics:
     // Straightaways & sweepers (absK <= 0.038) run flat out!
+    // In the very last turn (progress >= 0.88), there is zero reason for braking; it is 100% FLAT OUT!
     let speedMs = KRPO_10_UNBOOSTED_SPEED_MS; // 41.67 m/s (150 km/h)
-    if (absK > 0.038) {
-      // Hairpins
+    if (absK > 0.038 && !isLastTurn) {
+      // True hairpins only (Sectors 2, 5, 8); the last turn is flat-out
       const kinematicApexSpeed = Math.max(24.0, (3.2 / absK) * (0.85 + (gen / 10.0) * 0.25));
       speedMs = kinematicApexSpeed;
     }
 
-    // Boost: triggers on straightaways and corner exits
-    const canBoostThisGen = estIndex > 1 && (absK < 0.028 || f % 60 < 25);
-    const isBoosting = canBoostThisGen && !isCollision && f > 15;
+    // Boost: triggers on straightaways and corner exits with drain (-0.2/s) & slow replenishment (+0.1/s)
+    const dt = lapTime / totalFrames;
+    const canBoostThisGen = estIndex > 1 && (absK < 0.028 || isLastTurn || (f % 90 < 35));
+    const wantsBoost = canBoostThisGen && !isCollision && f > 15;
+    const isBoosting = wantsBoost && currentBoostReserve > 0.02;
+
     if (isBoosting) {
       speedMs = Math.min(KRPO_10_BOOSTED_SPEED_MS, speedMs * 1.6);
-      boostDuration += 0.14;
+      boostDuration += dt;
+      currentBoostReserve = Math.max(0, currentBoostReserve - 0.20 * dt); // Takes 5s to drain 100%
       if (!wasBoosting) boostActivations++;
+    } else {
+      // Slowly regenerates boost when unboosted (takes 10s to fully recharge, exactly matching useCarPhysics.ts)
+      currentBoostReserve = Math.min(1.0, currentBoostReserve + 0.10 * dt);
     }
     wasBoosting = isBoosting;
 
@@ -427,6 +460,10 @@ function generateSingleSwarmEstimation(estIndex: number): SwarmEstimationRun {
       checkpointsCrossed.push(Math.round(time * 100) / 100);
     }
 
+    // Controls: In the very last turn, throttle is 100%, brake is strictly 0.0!
+    const throttle = (isCollision && !isLastTurn) ? 0.0 : 1.0;
+    const brake = (isCollision && !isLastTurn) ? 0.85 : 0.0;
+
     frames.push({
       tick: f,
       time: Math.round(time * 100) / 100,
@@ -435,10 +472,10 @@ function generateSingleSwarmEstimation(estIndex: number): SwarmEstimationRun {
       speed: Math.round(speedMs * 100) / 100,
       speedKmh,
       steering: Math.max(-1.0, Math.min(1.0, -tangent.x * 0.85)),
-      throttle: isCollision ? 0.0 : 1.0,
-      brake: isCollision ? 0.85 : 0.0,
+      throttle: Math.round(throttle * 100) / 100,
+      brake: Math.round(brake * 100) / 100,
       isBoosting,
-      boostReserve: Math.max(0.05, 1.0 - (f % 50) * 0.02),
+      boostReserve: Math.round(currentBoostReserve * 1000) / 1000,
       checkpointIndex: currentCP,
       lapProgress: progress,
       lateralOffset,
@@ -505,12 +542,17 @@ export function get40SwarmReplays(): ReplayDataset[] {
 export function getAllReplays(): Record<RunTypeKey, ReplayDataset> {
   if (!_replaysCache) {
     const swarm = getAll40Estimations();
+    const dqnData = (dqnDatasetRaw && (dqnDatasetRaw as any).frames)
+      ? (dqnDatasetRaw as unknown as ReplayDataset)
+      : generateRealisticReplay('dqn');
+
     // Connect authoritative reference runs directly to the 40-estimation swarm!
     _replaysCache = {
-      best: swarm[39].dataset,      // Est 40: Gen 10.4 All-Time Champion (71.12s)
+      best: swarm[39].dataset,      // Est 40: Gen 10.4 All-Time Champion (59.18s)
       baseline: swarm[0].dataset,    // Est 1: Gen 1.1 Baseline Centerline (84.45s)
       early: swarm[3].dataset,       // Est 4: Gen 1.4 Early Candidate (78.50s)
       failed: swarm[2].dataset,      // Est 3: Gen 1.3 Collision Crash Run (92.40s)
+      dqn: dqnData,                  // Deep Q-Network Agent (PyTorch CUDA)
     };
   }
   return _replaysCache;

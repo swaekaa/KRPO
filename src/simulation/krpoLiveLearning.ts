@@ -48,6 +48,7 @@ export interface LiveCandidateState {
   rotationY: number;
   speedMs: number;
   speedKmh: number;
+  lateralOffset: number;
   steering: number;
   throttle: number;
   brake: number;
@@ -92,6 +93,7 @@ export interface LiveOptimizerSnapshot {
   unconventionalStyle?: string;
   unconventionalDescription?: string;
   brakingPointShiftMeters?: number;
+  upcomingApexKappa?: number;
 }
 
 class LiveOptimizerService {
@@ -180,7 +182,7 @@ class LiveOptimizerService {
   private swarmConfigs = [
     { id: 'cand-a', name: 'Agent Alpha (V-Line Squaring)', color: '#FF3366', speedBias: 1.05, style: 'V-Line' },
     { id: 'cand-b', name: 'Agent Beta (Chicane Cut-Through)', color: '#00E5FF', speedBias: 1.03, style: 'Chicane Cut' },
-    { id: 'cand-c', name: 'Agent Gamma (Deep Trail-Brake Dive)', color: '#FFD700', speedBias: 0.99, style: 'Trail Brake' },
+    { id: 'cand-c', name: 'Agent Gamma (Deep Trail-Brake Dive)', color: '#A855F7', speedBias: 0.99, style: 'Trail Brake' },
   ];
 
   public setSpeedMultiplier(mult: number) {
@@ -250,24 +252,28 @@ class LiveOptimizerService {
     // For curvature <= 0.038 (such as the start chicane diagonal cut, the ocean sweeper,
     // flowing serpentine transitions, and exit kinks), the car does NOT need to brake at all!
     // It can take them 100% flat-out at up to 240 km/h with boost.
+    // The very last turn (progress >= 0.85) is 100% flat out without braking!
+    const isLastTurn = clampedProgress >= 0.85;
     let distAhead = 0;
     let upcomingApexKappa = 0;
     let distToUpcomingApex = Infinity;
 
-    for (let offset = 1; offset <= 35; offset++) {
-      const nextIdx = (sampleIdx + offset) % n;
-      const prevIdx = (sampleIdx + offset - 1 + n) % n;
-      const s1 = samples[prevIdx].position;
-      const s2 = samples[nextIdx].position;
-      distAhead += Math.hypot(s2.x - s1.x, s2.z - s1.z);
+    if (!isLastTurn) {
+      for (let offset = 1; offset <= 35; offset++) {
+        const nextIdx = (sampleIdx + offset) % n;
+        const prevIdx = (sampleIdx + offset - 1 + n) % n;
+        const s1 = samples[prevIdx].position;
+        const s2 = samples[nextIdx].position;
+        distAhead += Math.hypot(s2.x - s1.x, s2.z - s1.z);
 
-      const k = Math.abs(samples[nextIdx].curvature || 0);
-      if (k > upcomingApexKappa) {
-        upcomingApexKappa = k;
-        // Only mark true hairpin braking zones (k > 0.038).
-        // Gentle sweepers, chicane cuts, and exit kinks are flat-out!
-        if (k > 0.038 && distToUpcomingApex === Infinity) {
-          distToUpcomingApex = distAhead;
+        const k = Math.abs(samples[nextIdx].curvature || 0);
+        if (k > upcomingApexKappa) {
+          upcomingApexKappa = k;
+          // Only mark true hairpin braking zones (k > 0.038).
+          // Gentle sweepers, chicane cuts, and exit kinks are flat-out!
+          if (k > 0.038 && distToUpcomingApex === Infinity) {
+            distToUpcomingApex = distAhead;
+          }
         }
       }
     }
@@ -276,7 +282,7 @@ class LiveOptimizerService {
     const currentSpeedEstimate = this.autonomousBoostEngaged ? KRPO_10_BOOSTED_SPEED_MS : KRPO_10_UNBOOSTED_SPEED_MS;
     const cornerIndex = Math.min(9, Math.floor(clampedProgress * 10));
     const telemetry = this.cornerTelemetry[cornerIndex];
-    const isHairpinBrakingZone = upcomingApexKappa > 0.038;
+    const isHairpinBrakingZone = !isLastTurn && upcomingApexKappa > 0.038;
     
     let stoppingDistReq = 0;
     if (isHairpinBrakingZone) {
@@ -291,17 +297,20 @@ class LiveOptimizerService {
     this.stoppingDistReq = stoppingDistReq;
 
     // ── SMART AUTONOMOUS BOOST RECOVERABILITY ──
-    // In flat-out sweepers, chicane cuts, and exit kinks, boost stays active continuously!
+    // In flat-out sweepers, chicane cuts, exit kinks, and the very last turn, boost stays active!
     // In true hairpins, boost cuts within stopping distance and launches on corner exit recovery.
     const isSafeStraightAhead = !isHairpinBrakingZone || distToUpcomingApex > (stoppingDistReq + 5.0);
-    const isCornerExitRecovered = (absKappa < (isHairpinBrakingZone ? this.currentCandidate.boostExitCurvature : 0.038)) && this.collisionCooldown <= 0;
-    const autonomousBoostTrigger = isSafeStraightAhead && isCornerExitRecovered && this.boostReserve > 0.01;
+    const isCornerExitRecovered = (absKappa < (isHairpinBrakingZone ? this.currentCandidate.boostExitCurvature : 0.038) || isLastTurn) && this.collisionCooldown <= 0;
+    
+    // Hysteresis: once depleted, wait for at least 25% recharge before triggering autonomous boost again
+    const hasSufficientCharge = this.boostReserve > (this.wasBoosting ? 0.02 : 0.25);
+    const autonomousBoostTrigger = isSafeStraightAhead && isCornerExitRecovered && hasSufficientCharge;
 
-    const isBoosting = (this.manualBoostActive || autonomousBoostTrigger) && this.boostReserve > 0.01;
+    const isBoosting = (this.manualBoostActive || autonomousBoostTrigger) && this.boostReserve > 0.02;
     this.autonomousBoostEngaged = autonomousBoostTrigger && isBoosting;
 
     if (isBoosting) {
-      this.boostReserve = Math.max(0, this.boostReserve - 0.20 * dt); // 5 sec continuous boost capacity
+      this.boostReserve = Math.max(0, this.boostReserve - 0.20 * dt); // 5 sec continuous boost capacity (-20%/s)
       this.lapBoostTime += dt;
       if (!this.wasBoosting) {
         this.lapBoostActivations++;
@@ -309,8 +318,10 @@ class LiveOptimizerService {
         this.eventTimer = 2.0;
       }
     } else {
-      // Regenerative energy recovery (recharges faster during braking zones)
-      const regenRate = absKappa > 0.038 ? 0.24 : 0.15;
+      // Smart regeneration:
+      // Trail-braking into corners harvests kinetic energy (KERS) at 3.8x speed (+38%/s)
+      const isCornerBraking = absKappa > 0.038;
+      const regenRate = isCornerBraking ? 0.38 : 0.12;
       this.boostReserve = Math.min(1.0, this.boostReserve + regenRate * dt);
     }
     this.wasBoosting = isBoosting;
@@ -327,8 +338,8 @@ class LiveOptimizerService {
     const effectiveKappa = Math.max(0, absKappa * (1.0 - geometryStraighteningFactor));
 
     let activeSpeedMs: number;
-    if (effectiveKappa <= 0.038) {
-      // 100% FLAT-OUT: Gentle sweepers, start chicane diagonal cut, and exit kinks
+    if (effectiveKappa <= 0.038 || isLastTurn) {
+      // 100% FLAT-OUT: Gentle sweepers, start chicane diagonal cut, exit kinks, and the very last turn!
       // NO ARTIFICIAL BRAKING OR SLOWDOWN! Reaches full 150 km/h unboosted or 240 km/h under boost.
       activeSpeedMs = isBoosting ? KRPO_10_BOOSTED_SPEED_MS : KRPO_10_UNBOOSTED_SPEED_MS;
       activeSpeedMs *= this.currentCandidate.cornerSpeedBias;
@@ -569,6 +580,7 @@ class LiveOptimizerService {
     // Speed calculation strictly matching 10/10 vehicle design:
     // Straightaways unboosted: reaches ~150 km/h (41.67 m/s)
     // Straightaways with boost: reaches ~240 km/h (66.67 m/s) with 1.6x multiplier
+    const isLastTurn = clampedProgress >= 0.85;
     const isBoosting = this.autonomousBoostEngaged || (this.manualBoostActive && this.boostReserve > 0.01);
     const boostMult = isBoosting ? 1.6 : 1.0;
 
@@ -578,8 +590,8 @@ class LiveOptimizerService {
     const effectiveKappa = Math.max(0, absK * (1.0 - geometryStraighteningFactor));
 
     let speedMs: number;
-    if (effectiveKappa <= 0.038) {
-      // 100% FLAT-OUT: Gentle sweepers, chicane diagonal cuts, and exit kinks (no braking!)
+    if (effectiveKappa <= 0.038 || isLastTurn) {
+      // 100% FLAT-OUT: Gentle sweepers, chicane diagonal cuts, exit kinks, and the very last turn (no braking!)
       speedMs = isBoosting ? KRPO_10_BOOSTED_SPEED_MS : KRPO_10_UNBOOSTED_SPEED_MS;
       speedMs *= this.currentCandidate.cornerSpeedBias;
     } else {
@@ -598,8 +610,8 @@ class LiveOptimizerService {
     const speedKmh = Math.round(speedMs * 3.6 * 10) / 10;
     const isCollision = this.collisionCooldown > 0;
 
-    // Throttle is 100% flat-out unless approaching an unavoidable hairpin braking zone
-    const isApproachingHairpinBrake = this.distToUpcomingApex < this.stoppingDistReq && this.upcomingApexKappa > 0.038;
+    // Throttle is 100% flat-out unless approaching an unavoidable hairpin braking zone (never in the last turn!)
+    const isApproachingHairpinBrake = !isLastTurn && this.distToUpcomingApex < this.stoppingDistReq && this.upcomingApexKappa > 0.038;
 
     const heroCar: LiveCandidateState = {
       id: 'hero-candidate',
@@ -609,6 +621,7 @@ class LiveOptimizerService {
       rotationY: rotY,
       speedMs,
       speedKmh,
+      lateralOffset: Math.round(lateralOffset * 100) / 100,
       steering: Math.max(-1.0, Math.min(1.0, -tangent.x * 0.85)),
       throttle: isApproachingHairpinBrake ? 0.0 : 1.0,
       brake: isApproachingHairpinBrake ? 0.85 : 0.0,
@@ -661,6 +674,7 @@ class LiveOptimizerService {
         rotationY: sRotY,
         speedMs: sSpeedMs,
         speedKmh: sSpeedKmh,
+        lateralOffset: Math.round(swarmOffset * 100) / 100,
         steering: -sTang.x * 0.8,
         throttle: 0.9,
         brake: 0.0,
@@ -704,6 +718,7 @@ class LiveOptimizerService {
       unconventionalStyle: this.currentCandidate.style,
       unconventionalDescription: this.currentCandidate.description,
       brakingPointShiftMeters: this.currentCandidate.brakingOffsetMeters,
+      upcomingApexKappa: this.upcomingApexKappa,
     };
   }
 }

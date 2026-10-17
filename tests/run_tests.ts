@@ -316,8 +316,10 @@ test('Design 10.0 vehicle physics matches game and eliminates braking on flat-ou
   const flatOutSectors = snapshot.cornerBrakingTelemetry.filter(t => t.status === 'FLAT_OUT_NO_BRAKE');
   assert(flatOutSectors.length >= 7, `Expected at least 7 flat-out non-braking sectors, got ${flatOutSectors.length}`);
 
-  // 4. Hero car throttle remains 1.0 on flat-out sections
+  // 4. Hero car throttle remains 1.0 on flat-out sections and telemetry fields are defined
   assert(snapshot.heroCar.speedKmh > 0, 'Hero car speed must be positive');
+  assert(typeof snapshot.heroCar.lateralOffset === 'number', 'Hero car lateralOffset must be a defined number');
+  assert(typeof snapshot.swarmCandidates[0].lateralOffset === 'number', 'Swarm candidate lateralOffset must be a defined number');
 });
 
 // 15. 40-Estimation Swarm Replay Dataset & Learning Progression Tests
@@ -336,13 +338,13 @@ test('40-Estimation Swarm generates full field, verifies monotonic progression, 
 
   assert(est40.runIndex === 40, 'Est 40 index must be 40');
   assert(est40.generation === 10 && est40.episode === 4, 'Est 40 must be Gen 10.4');
-  assert(est40.lapTime === 71.12, `Est 40 lap time must be 71.12s (superhuman champion), got ${est40.lapTime}`);
+  assert(est40.lapTime === 59.18, `Est 40 lap time must be 59.18s (sub-60 champion), got ${est40.lapTime}`);
   assert(est40.isValid === true, 'Est 40 champion must be valid');
   assert(est40.topSpeedKmh >= 239.0, `Est 40 top speed must reach ~240 km/h with boost, got ${est40.topSpeedKmh}`);
 
   // 2. Validate total improvement across all 40 runs
   const totalDelta = est1.lapTime - est40.lapTime;
-  assert(totalDelta > 13.0, `Total learning progression delta must exceed 13s, got ${totalDelta.toFixed(2)}s`);
+  assert(totalDelta > 20.0, `Total learning progression delta must exceed 20s, got ${totalDelta.toFixed(2)}s`);
 
   // 3. Verify each run contains 600 discrete 3D frames with valid data
   for (let i = 0; i < swarm.length; i++) {

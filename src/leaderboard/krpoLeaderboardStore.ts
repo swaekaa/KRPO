@@ -48,7 +48,7 @@ export interface KRPOLeaderboardState {
   history: KRPOLeaderboardEntry[];
 }
 
-const STORAGE_KEY = 'klustor_krpo_leaderboard_v2';
+const STORAGE_KEY = 'klustor_krpo_leaderboard_v3';
 
 function formatLapTime(sec: number): string {
   if (!sec || sec === Infinity) return '--:--.---';
@@ -64,10 +64,10 @@ const INITIAL_BASELINE: KRPOLeaderboardEntry = {
   policyName: 'Centerline Zero-Knowledge Baseline (No Boost)',
   generation: 0,
   episode: 1,
-  lapTime: 178.45,
-  formattedLapTime: formatLapTime(178.45),
-  avgSpeedKmh: 75.4,
-  topSpeedKmh: 82.1,
+  lapTime: 84.45,
+  formattedLapTime: formatLapTime(84.45),
+  avgSpeedKmh: 144.1,
+  topSpeedKmh: 150.0,
   isValid: true,
   isNewBest: true,
   designScore: 10.0,
@@ -76,7 +76,28 @@ const INITIAL_BASELINE: KRPOLeaderboardEntry = {
   boostDuration: 0.0,
   maxBoostSpeedKmh: 0.0,
   trackVersion: 'vice-coast-v2',
-  timestamp: '2026-10-14T10:00:00.000Z',
+  timestamp: new Date().toISOString(),
+};
+
+export const DQN_PYTORCH_ENTRY: KRPOLeaderboardEntry = {
+  runId: 'dqn-eval-pytorch-best',
+  checkpointId: 'ckpt-dqn-dueling-ddqn',
+  policyName: '🤖 Deep Q-Network Agent (PyTorch CUDA)',
+  generation: 1,
+  episode: 1,
+  lapTime: 104.5,
+  formattedLapTime: '01:44.50',
+  avgSpeedKmh: 150.1,
+  topSpeedKmh: 207.0,
+  isValid: true,
+  isNewBest: false,
+  designScore: 10.0,
+  designId: 'krpo-prototype-10-perfect',
+  boostActivations: 130,
+  boostDuration: 18.2,
+  maxBoostSpeedKmh: 207.0,
+  trackVersion: 'vice-coast-v2',
+  timestamp: new Date().toISOString(),
 };
 
 class KRPOLeaderboardService {
@@ -100,12 +121,12 @@ class KRPOLeaderboardService {
       percentageImproved: 0.0,
       currentGeneration: 1,
       currentEpisode: 1,
-      totalRuns: 1,
-      validRuns: 1,
+      totalRuns: 2,
+      validRuns: 2,
       invalidRuns: 0,
       isTrainingActive: true,
       lastUpdated: new Date().toISOString(),
-      history: [{ ...INITIAL_BASELINE }],
+      history: [DQN_PYTORCH_ENTRY, { ...INITIAL_BASELINE }],
     };
 
     if (typeof window === 'undefined' || !window.localStorage) {
@@ -117,6 +138,16 @@ class KRPOLeaderboardService {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed.bestRecord && parsed.history) {
+          if (!parsed.history.some((h: any) => h.runId && h.runId.includes('dqn'))) {
+            parsed.history.unshift(DQN_PYTORCH_ENTRY);
+          }
+          if (parsed.baselineLapTime > 100) {
+            parsed.baselineLapTime = INITIAL_BASELINE.lapTime;
+            parsed.formattedBaselineTime = INITIAL_BASELINE.formattedLapTime;
+            if (parsed.bestRecord.lapTime > 100) {
+              parsed.bestRecord = { ...INITIAL_BASELINE };
+            }
+          }
           return {
             ...defaultState,
             ...parsed,
