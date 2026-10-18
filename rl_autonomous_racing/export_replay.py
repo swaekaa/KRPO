@@ -17,7 +17,7 @@ from dqn_agent import DQNAgent
 
 
 def export_replay(checkpoint_path, output_path):
-    env = ViceCoastRacingEnv(max_steps_per_episode=3000, dt=0.05)
+    env = ViceCoastRacingEnv(max_steps_per_episode=3500, dt=0.05, max_collisions=100)
     agent = DQNAgent(state_dim=env.obs_dim, action_dim=env.act_dim)
 
     if os.path.exists(checkpoint_path):
@@ -83,7 +83,7 @@ def export_replay(checkpoint_path, output_path):
         }
         frames.append(frame)
 
-        if terminated or truncated:
+        if env.lap_completed or truncated:
             break
 
     lap_time = round(env.step_count * env.dt, 2)

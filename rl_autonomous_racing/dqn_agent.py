@@ -98,7 +98,7 @@ class DQNAgent:
     def __init__(
         self,
         state_dim=13,
-        action_dim=10,
+        action_dim=12,
         lr=5e-4,
         gamma=0.99,
         epsilon_start=1.0,
@@ -235,15 +235,27 @@ class DQNAgent:
             adapted_w[:old_actions] = loaded_adv_weight
             adapted_b[:old_actions] = loaded_adv_bias
 
-            # Smartly initialize Action 8 (Mild Left + Boost) and Action 9 (Mild Right + Boost)
+            # Smartly initialize Action 8 (Medium Left + Boost) and Action 9 (Medium Right + Boost)
             if new_actions >= 10 and old_actions >= 8:
-                # Action 8: Blend of Action 1 (Mild Left) and Action 3 (Straight + Boost)
                 adapted_w[8] = 0.5 * (loaded_adv_weight[1] + loaded_adv_weight[3])
                 adapted_b[8] = 0.5 * (loaded_adv_bias[1] + loaded_adv_bias[3])
 
-                # Action 9: Blend of Action 4 (Mild Right) and Action 3 (Straight + Boost)
                 adapted_w[9] = 0.5 * (loaded_adv_weight[4] + loaded_adv_weight[3])
                 adapted_b[9] = 0.5 * (loaded_adv_bias[4] + loaded_adv_bias[3])
+
+            # Smartly initialize Action 10 (Micro Left + Boost) and Action 11 (Micro Right + Boost)
+            if new_actions >= 12:
+                ref_boost_w = loaded_adv_weight[3] if old_actions > 3 else adapted_w[3]
+                ref_boost_b = loaded_adv_bias[3] if old_actions > 3 else adapted_b[3]
+                ref_l_w = loaded_adv_weight[8] if old_actions > 8 else adapted_w[8]
+                ref_l_b = loaded_adv_bias[8] if old_actions > 8 else adapted_b[8]
+                ref_r_w = loaded_adv_weight[9] if old_actions > 9 else adapted_w[9]
+                ref_r_b = loaded_adv_bias[9] if old_actions > 9 else adapted_b[9]
+
+                adapted_w[10] = 0.65 * ref_boost_w + 0.35 * ref_l_w
+                adapted_b[10] = 0.65 * ref_boost_b + 0.35 * ref_l_b
+                adapted_w[11] = 0.65 * ref_boost_w + 0.35 * ref_r_w
+                adapted_b[11] = 0.65 * ref_boost_b + 0.35 * ref_r_b
 
             policy_sd["advantage_stream.2.weight"] = adapted_w
             policy_sd["advantage_stream.2.bias"] = adapted_b
@@ -260,6 +272,11 @@ class DQNAgent:
                 adapted_target_b[8] = adapted_b[8]
                 adapted_target_w[9] = adapted_w[9]
                 adapted_target_b[9] = adapted_b[9]
+            if new_actions >= 12:
+                adapted_target_w[10] = adapted_w[10]
+                adapted_target_b[10] = adapted_b[10]
+                adapted_target_w[11] = adapted_w[11]
+                adapted_target_b[11] = adapted_b[11]
 
             target_sd["advantage_stream.2.weight"] = adapted_target_w
             target_sd["advantage_stream.2.bias"] = adapted_target_b

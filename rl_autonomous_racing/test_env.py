@@ -74,7 +74,7 @@ def run_tests():
                 agent_resume.memory.push(obs, 8, 1.5, next_obs, False)
             resume_loss = agent_resume.update()
             assert resume_loss is not None, "Resumed agent update should compute loss without shape errors"
-            print(f"✓ Warm-start 8->10 action checkpoint adaptation & Bellman gradient step verified (Loss: {resume_loss:.4f}).")
+            print(f"✓ Warm-start action checkpoint adaptation & Bellman gradient step verified (Loss: {resume_loss:.4f}).")
 
     except ImportError:
         print("⚠️ PyTorch not detected in current Python environment. Skipping tensor checks.")

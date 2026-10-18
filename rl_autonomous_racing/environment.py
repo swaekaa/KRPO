@@ -167,51 +167,56 @@ class ViceCoastRacingEnv:
       7-11: 5-ray simulated LIDAR rangefinders (-60°, -30°, 0°, +30°, +60°)
       12: Boost reserve ratio (0.0 to 1.0)
 
-    Action Space (Discrete(10)):
+    Action Space (Discrete(12)):
       0: Hard Left  + Throttle (steer = -1.0, throttle = 1.0)
-      1: Mild Left  + Throttle (steer = -0.45, throttle = 1.0)
+      1: Medium Left + Throttle (steer = -0.35, throttle = 1.0)
       2: Straight   + Throttle (steer =  0.0, throttle = 1.0)
       3: Straight   + Nitro Boost (steer = 0.0, throttle = 1.0, boost = 1.0)
-      4: Mild Right + Throttle (steer = +0.45, throttle = 1.0)
+      4: Medium Right + Throttle (steer = +0.35, throttle = 1.0)
       5: Hard Right + Throttle (steer = +1.0, throttle = 1.0)
       6: Heavy Trail Brake (steer = 0.0, throttle = 0.0, brake = 1.0, KERS Active)
       7: Coast / Idle (steer = 0.0, throttle = 0.25, brake = 0.0)
-      8: Mild Left  + Nitro Boost (steer = -0.35, throttle = 1.0, boost = 1.0)
-      9: Mild Right + Nitro Boost (steer = +0.35, throttle = 1.0, boost = 1.0)
+      8: Medium Left  + Nitro Boost (steer = -0.35, throttle = 1.0, boost = 1.0)
+      9: Medium Right + Nitro Boost (steer = +0.35, throttle = 1.0, boost = 1.0)
+      10: Micro Left  + Nitro Boost (steer = -0.14, throttle = 1.0, boost = 1.0) [Sweepers @ 240 km/h]
+      11: Micro Right + Nitro Boost (steer = +0.14, throttle = 1.0, boost = 1.0) [Sweepers @ 240 km/h]
     """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
     # Action Mapping Table: (steering, throttle, brake, boost)
     ACTION_MAP = {
-        0: (-1.0, 1.0, 0.0, False),   # Hard Left + Accel
-        1: (-0.45, 1.0, 0.0, False),  # Mild Left + Accel
-        2: (0.0, 1.0, 0.0, False),    # Straight + Full Accel
-        3: (0.0, 1.0, 0.0, True),     # Straight + Boost
-        4: (0.45, 1.0, 0.0, False),   # Mild Right + Accel
-        5: (1.0, 1.0, 0.0, False),    # Hard Right + Accel
-        6: (0.0, 0.0, 1.0, False),    # Heavy Trail Brake (KERS Rapid Regen)
-        7: (0.0, 0.25, 0.0, False),   # Coast
-        8: (-0.35, 1.0, 0.0, True),   # Mild Left + Boost (Sweepers & Corner Exit)
-        9: (0.35, 1.0, 0.0, True),    # Mild Right + Boost (Sweepers & Corner Exit)
+        0: (-1.0, 1.0, 0.0, False),    # Hard Left + Accel (Hairpin apex dive)
+        1: (-0.35, 1.0, 0.0, False),   # Medium Left + Accel
+        2: (0.0, 1.0, 0.0, False),     # Straight + Full Accel
+        3: (0.0, 1.0, 0.0, True),      # Straight + Boost (240 km/h)
+        4: (0.35, 1.0, 0.0, False),    # Medium Right + Accel
+        5: (1.0, 1.0, 0.0, False),     # Hard Right + Accel (Hairpin apex dive)
+        6: (0.0, 0.0, 1.0, False),     # Heavy Trail Brake (KERS Rapid Regen)
+        7: (0.0, 0.25, 0.0, False),    # Coast
+        8: (-0.35, 1.0, 0.0, True),    # Medium Left + Boost (Corner Exit Launch)
+        9: (0.35, 1.0, 0.0, True),     # Medium Right + Boost (Corner Exit Launch)
+        10: (-0.14, 1.0, 0.0, True),   # Micro Left + Boost (Flat-out 240 km/h Sweepers)
+        11: (0.14, 1.0, 0.0, True),    # Micro Right + Boost (Flat-out 240 km/h Sweepers)
     }
 
-    def __init__(self, max_steps_per_episode=2000, dt=0.05):
+    def __init__(self, max_steps_per_episode=2000, dt=0.05, max_collisions=20):
         self.dt = dt
         self.max_steps = max_steps_per_episode
+        self.max_collisions = max_collisions
         self.track = ViceCoastTrack()
 
         # Vehicle Kinematics (Authoritative 10/10 Prototype)
         self.top_speed_unboosted = 150.0 / 3.6  # 41.67 m/s (~150 km/h)
         self.top_speed_boosted   = 240.0 / 3.6  # 66.67 m/s (~240 km/h)
-        self.accel = 11.2                       # m/s^2
-        self.brake_strength = 28.0              # m/s^2
-        self.steer_strength = 3.2               # rad/s
-        self.friction = 5.0                     # m/s^2
+        self.accel = 13.5                       # m/s^2 (crisp throttle response)
+        self.brake_strength = 30.0              # m/s^2
+        self.steer_strength = 2.8               # rad/s (smoothed for 240 km/h stability)
+        self.friction = 4.2                     # m/s^2
 
         # State dimensions
         self.obs_dim = 13
-        self.act_dim = 10
+        self.act_dim = 12
 
         if HAS_GYMNASIUM:
             self.observation_space = spaces.Box(
@@ -253,31 +258,36 @@ class ViceCoastRacingEnv:
         is_boosting = False
         kers_charging = False
 
-        if wants_boost and self.boost_reserve > 0.03:
-            # Consume boost at 0.20/sec (~5.0s continuous burn)
-            self.boost_reserve = max(0.0, self.boost_reserve - 0.20 * self.dt)
+        if wants_boost and self.boost_reserve > 0.02:
+            # Extended nitro burn (0.12/s = 8.3s sustained supersonic boost)
+            self.boost_reserve = max(0.0, self.boost_reserve - 0.12 * self.dt)
             is_boosting = True
         else:
             # Smart Regeneration:
             if brake > 0.1:
-                # KERS: braking recovers kinetic energy at 3.5x rate into capacitor
+                # Supercharged KERS: heavy braking rapidly refills capacitor
                 speed_ratio = self.speed / max(1.0, self.top_speed_unboosted)
-                kers_regen = 0.42 * brake * (0.6 + 0.4 * speed_ratio)
+                kers_regen = 0.52 * brake * (0.6 + 0.4 * speed_ratio)
                 self.boost_reserve = min(1.0, self.boost_reserve + kers_regen * self.dt)
                 kers_charging = True
             else:
-                # Continuous alternator charge while cruising
+                # High-speed cruising alternator recovery (+0.26/s at top speed)
                 speed_ratio = self.speed / max(1.0, self.top_speed_unboosted)
-                base_regen = 0.10 + 0.06 * speed_ratio
+                base_regen = 0.16 + 0.10 * speed_ratio
                 self.boost_reserve = min(1.0, self.boost_reserve + base_regen * self.dt)
 
         # 2. Forward speed update
         b_mult = 1.6 if is_boosting else 1.0
         cur_max_speed = self.top_speed_unboosted * b_mult
-        cur_accel = self.accel * (1.2 if is_boosting else 1.0)
+        cur_accel = self.accel * (1.25 if is_boosting else 1.0)
 
         if throttle > 0:
-            self.speed = min(cur_max_speed, self.speed + cur_accel * throttle * self.dt)
+            if self.speed < cur_max_speed:
+                self.speed = min(cur_max_speed, self.speed + cur_accel * throttle * self.dt)
+            else:
+                # Aerodynamic drag gradually bleeds off hyper-speed down toward unboosted limit
+                aero_drag = (self.friction + 2.5) * self.dt
+                self.speed = max(cur_max_speed, self.speed - aero_drag)
         elif brake > 0:
             self.speed = max(0.0, self.speed - self.brake_strength * brake * self.dt)
         else:
@@ -323,9 +333,9 @@ class ViceCoastRacingEnv:
             longitudinal = to_car_x * tangent[0] + to_car_z * tangent[2]
             self.pos_x = track_pt[0] + tangent[0] * longitudinal + normal[0] * clamped_offset
             self.pos_z = track_pt[2] + tangent[2] * longitudinal + normal[2] * clamped_offset
-            self.speed *= 0.75  # Kinetic energy dissipation from barrier slam
+            self.speed *= 0.72  # Strong penalty for wall contact
             # Wall impact capacitor disruption
-            self.boost_reserve = max(0.0, self.boost_reserve - 0.08)
+            self.boost_reserve = max(0.0, self.boost_reserve - 0.10)
 
         # 6. Lap progress & checkpointing
         idx_diff = (nearest_idx - self.last_track_idx) % self.track.num_samples
@@ -339,52 +349,86 @@ class ViceCoastRacingEnv:
 
         self.last_track_idx = nearest_idx
 
-        # 7. Authentic Racing Reward Function Formulation
-        # Progress reward: +1.6 per track waypoint increment
-        r_progress = float(idx_diff) * 1.6
+        # 7. Sub-1:16 Competitive Reward Function Formulation
+        # Progress reward: +1.8 per track waypoint increment
+        r_progress = float(idx_diff) * 1.8
 
-        # Aggressive Speed Incentive: convex curve heavily rewarding 180-240 km/h
+        # Aggressive Speed Incentive: convex quadratic curve heavily rewarding 200-240 km/h
         norm_v = self.speed / self.top_speed_boosted
-        r_speed = 1.25 * (norm_v ** 1.6)
+        r_speed = 2.4 * (norm_v ** 2.0)
+
+        # Flat-out Supersonic (>= 200 km/h) & Hypersonic (>= 225 km/h) Tiered Bonus
+        if self.speed >= (225.0 / 3.6):
+            r_supersonic = 1.35  # Flat-out hypersonic terminal velocity
+        elif self.speed >= (200.0 / 3.6):
+            r_supersonic = 0.85
+        else:
+            r_supersonic = 0.0
 
         # Smart Boost Utilization Bonus: rewarded for boosting when aligned with the track
         r_boost = 0.0
         if is_boosting:
-            if abs(heading_err) < 0.28:
-                r_boost = 0.65  # Clean boost down straight or gentle sweeper
+            if abs(heading_err) < 0.25:
+                r_boost = 0.80  # Clean boost down straight or gentle sweeper
             else:
-                r_boost = -0.20  # Wasting nitro sideways into wall
+                r_boost = -0.25  # Wasting nitro sideways into wall
+
+        # Track curvature at current location
+        curve_k = abs(self.track.curvatures[nearest_idx])
+        raw_k = self.track.curvatures[nearest_idx]
+
+        # Corner Exit Launch Bonus: Reward boosting immediately as corner straightens out
+        r_exit_launch = 0.0
+        if is_boosting and curve_k < 0.014 and abs(heading_err) < 0.20:
+            r_exit_launch = 0.50
+
+        # Penalize unnecessary braking or coasting on straightaways or gentle sweepers
+        r_unnecessary_brake = 0.0
+        if brake > 0.1 and curve_k < 0.022:
+            r_unnecessary_brake = -0.75  # Strongly punish dragging brake on fast sections!
+
+        r_hesitation = 0.0
+        if throttle < 0.6 and brake < 0.1 and curve_k < 0.016:
+            r_hesitation = -0.50  # Punish coasting or under-throttling when flat-out is safe
 
         # Apex clipping & Racing Line reward:
         norm_lat = abs(lateral_offset) / MAX_LEGAL_OFFSET
-        curve_k = self.track.curvatures[nearest_idx]
-        if abs(curve_k) > 0.008:
+        if curve_k > 0.008:
             # In a corner: reward clipping the inside curb apex
-            inside_offset = -np.sign(curve_k) * (lateral_offset / MAX_LEGAL_OFFSET)
-            r_racing_line = 0.35 * np.clip(inside_offset, -0.4, 0.8)
-            # Only penalize if drifting dangerously near outer barrier
-            r_deviation = -0.8 * (max(0.0, norm_lat - 0.75) ** 2)
+            inside_offset = -np.sign(raw_k) * (lateral_offset / MAX_LEGAL_OFFSET)
+            r_racing_line = 0.45 * np.clip(inside_offset, -0.4, 0.85)
+            # Repulsion penalty when drifting dangerously near outer barrier (>68% half-width)
+            r_deviation = -2.2 * (max(0.0, norm_lat - 0.68) ** 1.5)
         else:
             # Straightaway: stay near centerline for cleanest line
             r_racing_line = 0.0
-            r_deviation = -0.25 * (norm_lat ** 2)
+            r_deviation = -0.30 * (norm_lat ** 2)
 
-        # Collision penalty
-        r_collision = -20.0 if is_collision else 0.0
+        # Proactive LIDAR Proximity Barrier Warning:
+        obs = self._get_observation()
+        min_lidar = float(np.min(obs[7:12]))
+        r_proximity = -2.5 * ((max(0.0, 0.24 - min_lidar) / 0.24) ** 1.5) if min_lidar < 0.24 else 0.0
+
+        # Collision penalty: high enough to overpower speed reward and eliminate barrier wall-riding
+        r_collision = -45.0 if is_collision else 0.0
 
         # Finish bonus
-        r_finish = 150.0 if self.lap_completed else 0.0
+        r_finish = 250.0 if self.lap_completed else 0.0
 
-        reward = r_progress + r_speed + r_boost + r_racing_line + r_deviation + r_collision + r_finish
+        reward = (
+            r_progress + r_speed + r_supersonic + r_boost + r_exit_launch +
+            r_unnecessary_brake + r_hesitation + r_racing_line + r_deviation +
+            r_proximity + r_collision + r_finish
+        )
 
         # 8. Termination conditions
-        terminated = bool(self.lap_completed or self.collision_count >= 5)
+        terminated = bool(self.lap_completed or self.collision_count >= self.max_collisions)
         truncated = bool(self.step_count >= self.max_steps)
 
-        obs = self._get_observation()
         info = self._get_info()
         info.update({
             "collision": is_collision,
+            "collision_count": self.collision_count,
             "lateral_offset": lateral_offset,
             "speed_kmh": self.speed * 3.6,
             "lap_completed": self.lap_completed,

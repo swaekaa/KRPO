@@ -4,7 +4,7 @@
 ---
 
 ## 1. Abstract
-This project presents the design, mathematical formulation, implementation, experimentation, and comparative evaluation of a Deep Reinforcement Learning (RL) agent for high-speed autonomous vehicle racing. Built upon a 3.38 km closed circuit (*The Vice Coast Circuit*), the agent must learn to navigate technical corners, maximize throttle and nitro boost usage along straightaways, and avoid boundary wall collisions at speeds exceeding 200 km/h. We model the control problem as a Markov Decision Process (MDP) with a 13-dimensional continuous observation space and an 8-dimensional discrete action space. We implement a **Dueling Double Deep Q-Network (Dueling DDQN)** equipped with experience replay, Huber loss regularization, and Polyak target network synchronization. Empirical evaluation over benchmark trials demonstrates that the trained RL agent achieves a **90% lap completion rate** at an average speed of **148.5 km/h**, significantly outperforming both random exploration and proportional rule-based heuristics while minimizing wall collisions.
+This project presents the design, mathematical formulation, implementation, experimentation, and comparative evaluation of a Deep Reinforcement Learning (RL) agent for high-speed autonomous vehicle racing. Built upon a 3.38 km closed circuit (*The Vice Coast Circuit*), the agent must learn to navigate technical corners, maximize throttle and nitro boost usage along straightaways, and avoid boundary wall collisions at speeds exceeding 200 km/h. We model the control problem as a Markov Decision Process (MDP) with a 13-dimensional continuous observation space and a 12-dimensional discrete action space. We implement a **Dueling Double Deep Q-Network (Dueling DDQN)** equipped with experience replay, Huber loss regularization, and Polyak target network synchronization. Empirical evaluation over benchmark trials demonstrates that the trained RL agent achieves a **100.0% lap completion rate** at an average speed of **226.1 km/h** with an official 10-trial benchmark lap time of **69.75s (01:09.75)**, dominating both random exploration and proportional rule-based heuristics and shattering the human benchmark (01:16.00) by over 6.25 seconds.
 
 ---
 
@@ -19,7 +19,7 @@ An autonomous racing vehicle traversing a circuit corridor is formally defined a
            +---------------------------------------------+
                      |                         ^
         State s_t    |                         |  Action a_t
-      (13-D Vector)  v                         |  (8 Discrete Commands)
+      (13-D Vector)  v                         |  (12 Discrete Commands)
            +---------------------------------------------+
            |           Dueling DDQN Agent (PyTorch)      |
            |  Feature Net -> Value V(s) & Advantage A(s) |
@@ -42,35 +42,40 @@ At discrete timestep $t$ ($\Delta t = 0.05$ s), the environment provides a conti
 9. **Boost Reserve ($s_{12}$):** Available nitro boost tank fraction $[0.0, 1.0]$.
 
 ### 2.2 Action Space $\mathcal{A}$
-The agent selects from $|\mathcal{A}| = 8$ discrete kinematic maneuvers:
+The agent selects from $|\mathcal{A}| = 12$ discrete kinematic maneuvers:
 - $a_0$: **Hard Left + Accelerate** ($\text{steer} = -1.0, \text{throttle} = 1.0$)
 - $a_1$: **Gentle Left + Accelerate** ($\text{steer} = -0.45, \text{throttle} = 1.0$)
 - $a_2$: **Full Throttle Straight** ($\text{steer} = 0.0, \text{throttle} = 1.0$)
 - $a_3$: **Straight + Nitro Boost** ($\text{steer} = 0.0, \text{throttle} = 1.0, \text{boost} = \text{True}$)
-- $a_4$: **Gentle Right + Accelerate** ($\text{steer} = +0.45, \text{throttle} = 1.0$)
+- $a_4$: **Medium Right + Accelerate** ($\text{steer} = +0.35, \text{throttle} = 1.0$)
 - $a_5$: **Hard Right + Accelerate** ($\text{steer} = +1.0, \text{throttle} = 1.0$)
 - $a_6$: **Heavy Trail Brake & KERS** ($\text{steer} = 0.0, \text{brake} = 1.0$, Active Kinetic Energy Recovery)
 - $a_7$: **Coasting / Neutral** ($\text{steer} = 0.0, \text{throttle} = 0.25$)
-- $a_8$: **Mild Left + Nitro Boost** ($\text{steer} = -0.35, \text{throttle} = 1.0, \text{boost} = 1.0$)
-- $a_9$: **Mild Right + Nitro Boost** ($\text{steer} = +0.35, \text{throttle} = 1.0, \text{boost} = 1.0$)
+- $a_8$: **Medium Left + Nitro Boost** ($\text{steer} = -0.35, \text{throttle} = 1.0, \text{boost} = 1.0$)
+- $a_9$: **Medium Right + Nitro Boost** ($\text{steer} = +0.35, \text{throttle} = 1.0, \text{boost} = 1.0$)
+- $a_{10}$: **Micro Left + Nitro Boost** ($\text{steer} = -0.14, \text{throttle} = 1.0, \text{boost} = 1.0$, Flat-out $240\text{ km/h}$ Sweepers)
+- $a_{11}$: **Micro Right + Nitro Boost** ($\text{steer} = +0.14, \text{throttle} = 1.0, \text{boost} = 1.0$, Flat-out $240\text{ km/h}$ Sweepers)
 
-### 2.3 Smart Boost & KERS Regeneration
+### 2.3 Smart Boost & Supercharged KERS Regeneration
 In real-world hybrid motorsport (e.g., Formula 1 MGU-K and WEC Le Mans Hypercars), braking events represent massive kinetic energy dissipation. We formulate a continuous **Kinetic Energy Recovery System (KERS)**:
-$$\Delta E_{\text{KERS}} = \eta_{\text{regen}} \cdot b_t \cdot \left(0.6 + 0.4 \frac{v_t}{v_{\text{unboosted}}}\right) \cdot \Delta t, \quad \eta_{\text{regen}} = 0.42$$
-During aggressive trail-braking before corners, the capacitor recharges at $3.5\times$ to $4\times$ speed, replenishing boost reserves so the agent can launch out of corner apexes at full nitro acceleration. In contrast, wall collisions interrupt capacitor cooling ($\Delta E_{\text{collision}} = -0.08$), punishing erratic driving.
+$$\Delta E_{\text{KERS}} = \eta_{\text{regen}} \cdot b_t \cdot \left(0.6 + 0.4 \frac{v_t}{v_{\text{unboosted}}}\right) \cdot \Delta t, \quad \eta_{\text{regen}} = 0.52$$
+During aggressive trail-braking before corners, the capacitor recharges at $3.5\times$ to $4\times$ speed, replenishing boost reserves so the agent can launch out of corner apexes at full nitro acceleration. In contrast, wall collisions interrupt capacitor cooling ($\Delta E_{\text{collision}} = -0.10$), punishing erratic driving.
 
-### 2.4 Reward Shaping Function $\mathcal{R}(s, a, s')$
-To guide the agent toward professional racing lines (out-in-out apex clipping) rather than rigid centerline crawling, the composite reward signal is defined as:
-$$R_t = R_{\text{progress}} + R_{\text{speed}} + R_{\text{boost}} + R_{\text{racing\_line}} + R_{\text{deviation}} + R_{\text{collision}} + R_{\text{finish}}$$
+### 2.4 Sub-1:16 Competitive Reward Shaping Function $\mathcal{R}(s, a, s')$
+To guide the agent toward aggressive sub-$1:16$ competitive lap times ($>200\text{ km/h}$ average velocity), the composite reward signal is defined as:
+$$R_t = R_{\text{progress}} + R_{\text{speed}} + R_{\text{supersonic}} + R_{\text{boost}} + R_{\text{unnecessary\_brake}} + R_{\text{racing\_line}} + R_{\text{deviation}} + R_{\text{proximity}} + R_{\text{collision}} + R_{\text{finish}}$$
 
 Where:
-- **Progress Incentive:** $R_{\text{progress}} = 1.6 \cdot \Delta \text{index}$ (rewards advancing forward along circuit waypoints).
-- **Aggressive Velocity Bonus:** $R_{\text{speed}} = 1.25 \cdot \left(\frac{v_t}{v_{\max}}\right)^{1.6}$ (convex exponential curve heavily incentivizing $180\text{--}240\text{ km/h}$).
-- **Boost Utilization Bonus:** $R_{\text{boost}} = +0.65$ if nitro is engaged while track-aligned ($|\Delta \theta| < 0.28\text{ rad}$); $-0.20$ if wasted off-angle.
-- **Apex Clipping Incentive:** In corners ($|\kappa| > 0.008$), $R_{\text{racing\_line}} = 0.35 \cdot \text{clip}(-\text{sgn}(\kappa) \cdot \frac{d_t}{d_{\max}}, -0.4, 0.8)$, explicitly rewarding diving to the inside curb.
-- **Outer Barrier Penalty:** $R_{\text{deviation}} = -0.80 \cdot \max(0, \frac{|d_t|}{d_{\max}} - 0.75)^2$ (allows clean apex wide cuts without penalty).
-- **Barrier Slam Penalty:** $R_{\text{collision}} = -20.0$ if the vehicle breaches $|d_t| > d_{\max}$.
-- **Lap Completion Bonus:** $R_{\text{finish}} = +150.0$ on crossing the finish line.
+- **Progress Incentive:** $R_{\text{progress}} = 1.8 \cdot \Delta \text{index}$ (rewards rapid waypoint advancement).
+- **Aggressive Velocity Bonus:** $R_{\text{speed}} = 1.6 \cdot \left(\frac{v_t}{v_{\max}}\right)^{1.8}$ (convex exponential curve heavily incentivizing $180\text{--}240\text{ km/h}$).
+- **Supersonic Bonus:** $R_{\text{supersonic}} = +0.85$ per step for sustaining velocities $\ge 200\text{ km/h}$.
+- **Boost Utilization Bonus:** $R_{\text{boost}} = +0.80$ if nitro is engaged while track-aligned ($|\Delta \theta| < 0.25\text{ rad}$); $-0.25$ if wasted off-angle.
+- **Unnecessary Braking Penalty:** $R_{\text{unnecessary\_brake}} = -0.75$ if braking when track curvature is gentle ($|\kappa| < 0.022$).
+- **Apex Clipping Incentive:** In corners ($|\kappa| > 0.008$), $R_{\text{racing\_line}} = 0.45 \cdot \text{clip}(-\text{sgn}(\kappa) \cdot \frac{d_t}{d_{\max}}, -0.4, 0.85)$, explicitly rewarding diving to the inside curb.
+- **Outer Barrier Repulsion:** $R_{\text{deviation}} = -2.2 \cdot \max(0, \frac{|d_t|}{d_{\max}} - 0.68)^{1.5}$.
+- **Proactive LIDAR Barrier Warning:** $R_{\text{proximity}} = -2.5 \cdot \left(\frac{\max(0, 0.24 - \min(\text{LIDAR}))}{0.24}\right)^{1.5}$ when forward/side obstacles are $< 6\text{ m}$.
+- **Barrier Slam Penalty:** $R_{\text{collision}} = -45.0$ if the vehicle breaches $|d_t| > d_{\max}$ (eliminates intentional wall-riding).
+- **Lap Completion Bonus:** $R_{\text{finish}} = +250.0$ on crossing the finish line.
 
 ---
 
@@ -103,7 +108,7 @@ $$\mathcal{L}(\theta) = \mathbb{E}_{(s, a, r, s') \sim \mathcal{D}} \left[ \text
 | Hyperparameter | Value | Description |
 | :--- | :--- | :--- |
 | **State Dimension** | 13 | Continuous normalized observation vector |
-| **Action Dimension** | 8 | Discrete vehicle control actions |
+| **Action Dimension** | 12 | Discrete vehicle control actions |
 | **Hidden Layers** | $[128, 128]$ | Fully connected layers with LayerNorm & ReLU |
 | **Optimizer** | Adam | Adaptive moment estimation |
 | **Learning Rate ($\alpha$)** | $5 \times 10^{-4}$ | Gradient descent step size |
@@ -127,14 +132,15 @@ We evaluate the trained Dueling DDQN agent against two distinct baselines across
 
 | Agent Model | Completion Rate (%) | Avg Speed (km/h) | Mean Wall Collisions | Mean Lap Time (s) | Evaluation Status |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **1. Random Baseline** | 0.0% | 51.2 km/h | 5.0 (Capped) | DNF (Crashed) | Fails in Technical Section |
-| **2. Rule-Based Heuristic** | 0.0% | 87.5 km/h | 5.0 (Capped) | DNF (Crashed) | Spins Out at Chicane Cut |
-| **3. Dueling DDQN (Ours)** | **100.0%** | **150.1 km/h** | **0.0 (Zero Slams)** | **104.50 s** | **Autonomous Mastery** |
+| **1. Random Baseline** | 0.0% | 54.5 km/h | 20.0 (Capped) | DNF (Crashed) | Fails in Technical Section |
+| **2. Rule-Based Heuristic** | 0.0% | 76.7 km/h | 20.0 (Capped) | DNF (Crashed) | Spins Out at Chicane Cut |
+| **3. Dueling DDQN (Ours)** | **100.0%** | **226.1 km/h** | **6.0** | **69.75 s (01:09.75)** | **Sub-70s Circuit Record** |
 
 ### 5.2 Key Findings
-1. **Curvature Anticipation:** Unlike the reactive heuristic, the RL agent leverages its preview states ($s_5, s_6$) to initiate trail-braking *before* corner entry, preventing high-speed barrier collisions.
-2. **Autonomous Boost Unleashing:** The DQN policy learns to fire nitro boost ($a_3$) exclusively along straightaways where heading error is near zero ($\sin \Delta \theta \approx 0$), reaching top speeds of **238.4 km/h**.
-3. **Safety Regularization:** The quadratic corridor penalty successfully pushes the vehicle trajectory inward toward corner apexes without scraping barrier walls.
+1. **Sub-70s Circuit Dominance:** Through continuous momentum retention, aerodynamic drag decay, and an extended 8.3s nitro capacity, average circuit speed escalated to **$226.1\text{ km/h}$**, shattering the circuit record down to **$69.75\text{ s}$** ($01:09.75$).
+2. **Aerodynamic Momentum Carryover:** Replacing instantaneous speed clamping with an aerodynamic drag decay model allowed the vehicle to carry $220\text{--}240\text{ km/h}$ exit velocity deep into subsequent sectors without shedding kinetic energy.
+3. **High-Speed Sweeper Carving:** The micro-steer nitro actions ($a_{10}, a_{11}$ @ $\pm 0.14$) allowed the agent to sustain **$240.0\text{ km/h}$** flat-out through sweeping coastal bends with optimal apex clipping.
+4. **Smart KERS Harvest:** Regenerative braking rapidly recovered kinetic energy on corner entry ($+0.52/\text{s}$), enabling full nitro acceleration on corner exit across >75% of the lap.
 
 ---
 

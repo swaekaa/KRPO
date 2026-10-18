@@ -82,24 +82,26 @@ python export_replay.py --checkpoint checkpoints/best_dqn_policy.pt --output dqn
   - 5-Ray synthetic LIDAR rangefinders ($\pm 60^\circ, \pm 30^\circ, 0^\circ$)
   - Nitro boost reserve ratio ($0.0 \to 1.0$)
 
-- **Action Space (10 Discrete Kinematic Maneuvers):**
+- **Action Space (12 Discrete Kinematic Maneuvers):**
   - `0`: Hard Left + Throttle
-  - `1`: Mild Left + Throttle
+  - `1`: Medium Left + Throttle
   - `2`: Straight + Full Throttle
   - `3`: Straight + Nitro Boost (240 km/h)
-  - `4`: Mild Right + Throttle
+  - `4`: Medium Right + Throttle
   - `5`: Hard Right + Throttle
-  - `6`: Heavy Trail Brake (**KERS Active**: Rapidly regenerates +42%/s)
+  - `6`: Heavy Trail Brake (**KERS Active**: Rapidly regenerates +52%/s)
   - `7`: Coast / Idle
-  - `8`: Mild Left + Nitro Boost (Sweepers & Corner Launch)
-  - `9`: Mild Right + Nitro Boost (Sweepers & Corner Launch)
+  - `8`: Medium Left + Nitro Boost (Corner Launch)
+  - `9`: Medium Right + Nitro Boost (Corner Launch)
+  - `10`: Micro Left + Nitro Boost (Flat-out 240 km/h Sweeper Carving)
+  - `11`: Micro Right + Nitro Boost (Flat-out 240 km/h Sweeper Carving)
 
 - **Smart Boost & KERS Regeneration:**
-  - **Dynamic KERS:** Heavy braking into corners harvests kinetic energy into the capacitor at $+0.42 \cdot \text{dt}$ (3.5x to 4x faster), ensuring 100% boost is available at the corner exit!
-  - **Alternator Trickle:** Smooth cruising trickles charge at $+0.12 \cdot \text{dt}$ with a speed bonus.
-  - **Wall Disruption:** Wall collisions disrupt the capacitor ($-0.08$ reserve), rewarding clean driving.
+  - **Dynamic KERS:** Heavy braking into corners harvests kinetic energy into the capacitor at $+0.52 \cdot \text{dt}$, ensuring 100% boost is available at the corner exit!
+  - **Alternator Trickle:** Smooth cruising trickles charge at up to $+0.22 \cdot \text{dt}$ with high-speed bonus.
+  - **Wall Disruption:** Wall collisions disrupt the capacitor ($-0.10$ reserve), rewarding clean driving.
 
 - **Reward Function:**
-  $$R_t = R_{\text{progress}} + R_{\text{speed}} + R_{\text{boost}} + R_{\text{racing\_line}} + R_{\text{deviation}} + R_{\text{collision}} + R_{\text{finish}}$$
+  $$R_t = R_{\text{progress}} + R_{\text{speed}} + R_{\text{supersonic}} + R_{\text{boost}} + R_{\text{unnecessary\_brake}} + R_{\text{racing\_line}} + R_{\text{deviation}} + R_{\text{proximity}} + R_{\text{collision}} + R_{\text{finish}}$$
 
 For detailed mathematical proofs, network architecture diagrams, and empirical results, see [`REPORT.md`](REPORT.md).

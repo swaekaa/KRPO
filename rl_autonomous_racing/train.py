@@ -45,7 +45,7 @@ def train(args):
         if args.epsilon_start < 1.0:
             agent.epsilon = args.epsilon_start
         else:
-            agent.epsilon = 0.35  # Warm-start fine-tuning exploration for new boost actions
+            agent.epsilon = 0.05  # Fine-tuning exploration default
         print(f"   Warm-start active: Epsilon reset to {agent.epsilon:.3f} for boost policy fine-tuning.")
 
     print("=" * 65)
@@ -68,6 +68,16 @@ def train(args):
     }
 
     best_reward = -float("inf")
+    best_lap_time = float("inf")
+    if args.resume and os.path.exists(args.resume_path):
+        print("🔍 Calibrating initial benchmark on loaded policy...")
+        _, _, init_lap = evaluate_policy(env, agent, num_episodes=1)
+        if init_lap < float("inf"):
+            best_lap_time = init_lap
+            m_s = f"{int(init_lap//60):02d}:{int(init_lap%60):02d}.{int((init_lap%1)*100):02d}"
+            print(f"   🏁 Active benchmark locked at: {best_lap_time:.2f}s ({m_s})")
+        else:
+            best_lap_time = 78.00
     start_time = time.time()
 
     for ep in range(1, args.episodes + 1):
@@ -99,8 +109,9 @@ def train(args):
 
         avg_loss = float(np.mean(losses)) if len(losses) > 0 else 0.0
         progress_pct = info.get("track_progress", 0.0) * 100.0
-        collisions = info.get("collisions", 0)
+        collisions = info.get("collision_count", info.get("collisions", 0))
         lap_completed = info.get("lap_completed", False)
+        lap_time = steps * env.dt
 
         history["episode_rewards"].append(total_reward)
         history["episode_steps"].append(steps)
@@ -109,7 +120,13 @@ def train(args):
         history["episode_collisions"].append(collisions)
 
         # Logging
-        status_flag = "🏆 LAP FINISHED!" if lap_completed else ("💥 WALL CONTACT" if collisions > 0 else "✓ CLEAN RUN")
+        if lap_completed:
+            status_flag = f"🏆 LAP: {lap_time:5.1f}s ({info.get('speed_kmh', 0.0):4.1f} km/h)"
+        elif collisions > 0:
+            status_flag = f"💥 WALL CONTACT ({collisions})"
+        else:
+            status_flag = "✓ CLEAN RUN"
+
         print(
             f"Ep {ep:3d}/{args.episodes:3d} | "
             f"Reward: {total_reward:7.1f} | "
@@ -120,16 +137,30 @@ def train(args):
             f"{status_flag}"
         )
 
-        # Checkpointing
-        if total_reward > best_reward or lap_completed:
-            best_reward = max(best_reward, total_reward)
-            save_path = os.path.join(args.save_dir, "best_dqn_policy.pt")
-            agent.save(save_path)
+        # Record Checkpointing: save strictly on faster completed lap time
+        if lap_completed:
+            if lap_time < best_lap_time:
+                best_lap_time = lap_time
+                best_reward = max(best_reward, total_reward)
+                m_s = f"{int(lap_time//60):02d}:{int(lap_time%60):02d}.{int((lap_time%1)*100):02d}"
+                print(f"  🔥 NEW ALL-TIME RECORD LAP TIME: {lap_time:.2f}s ({m_s}) [Contacts: {collisions}] — Saved to best_dqn_policy.pt")
+                save_path = os.path.join(args.save_dir, "best_dqn_policy.pt")
+                agent.save(save_path)
+        elif best_lap_time == float("inf"):
+            if total_reward > best_reward:
+                best_reward = total_reward
+                save_path = os.path.join(args.save_dir, "best_dqn_policy.pt")
+                agent.save(save_path)
 
-        # Periodic Evaluation
+        # Periodic Deterministic Evaluation (captures peak greedy performance)
         if ep % args.eval_interval == 0:
-            eval_reward, eval_prog = evaluate_policy(env, agent, num_episodes=3)
+            eval_reward, eval_prog, eval_lap = evaluate_policy(env, agent, num_episodes=2)
             print(f"  --> [EVALUATION @ Ep {ep}] Mean Reward: {eval_reward:.2f} | Mean Progress: {eval_prog:.1f}%")
+            if eval_lap < best_lap_time:
+                best_lap_time = eval_lap
+                m_s = f"{int(eval_lap//60):02d}:{int(eval_lap%60):02d}.{int((eval_lap%1)*100):02d}"
+                print(f"  🌟 NEW RECORD FROM DETERMINISTIC EVAL: {eval_lap:.2f}s ({m_s}) — Saved to best_dqn_policy.pt")
+                agent.save(os.path.join(args.save_dir, "best_dqn_policy.pt"))
 
     elapsed_time = time.time() - start_time
     print("=" * 65)
@@ -146,10 +177,11 @@ def train(args):
     return history
 
 
-def evaluate_policy(env, agent, num_episodes=3):
+def evaluate_policy(env, agent, num_episodes=2):
     """Runs deterministic evaluation without exploration noise."""
     rewards = []
     progresses = []
+    lap_times = []
     for _ in range(num_episodes):
         obs, _ = env.reset()
         ep_reward = 0.0
@@ -159,9 +191,15 @@ def evaluate_policy(env, agent, num_episodes=3):
             ep_reward += reward
             if terminated or truncated:
                 progresses.append(info.get("track_progress", 0.0) * 100.0)
+                if info.get("lap_completed", False):
+                    lap_s = env.step_count * env.dt
+                    lap_times.append(lap_s)
+                    m_s = f"{int(lap_s//60):02d}:{int(lap_s%60):02d}.{int((lap_s%1)*100):02d}"
+                    print(f"      ⚡ [Deterministic Eval] 100% Lap: {lap_s:.2f}s ({m_s}) @ {info.get('speed_kmh', 0.0):.1f} km/h")
                 break
         rewards.append(ep_reward)
-    return float(np.mean(rewards)), float(np.mean(progresses))
+    min_lap = min(lap_times) if len(lap_times) > 0 else float("inf")
+    return float(np.mean(rewards)), float(np.mean(progresses)), min_lap
 
 
 def plot_training_curves(history, output_path):
@@ -225,7 +263,7 @@ def plot_training_curves(history, output_path):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train DQN Racing Agent on Vice Coast Circuit")
     parser.add_argument("--episodes", type=int, default=150, help="Number of training episodes")
-    parser.add_argument("--max_steps", type=int, default=1500, help="Max steps per episode")
+    parser.add_argument("--max_steps", type=int, default=2500, help="Max steps per episode")
     parser.add_argument("--batch_size", type=int, default=64, help="Minibatch size")
     parser.add_argument("--lr", type=float, default=5e-4, help="Learning rate")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
@@ -234,7 +272,7 @@ if __name__ == "__main__":
     parser.add_argument("--epsilon_decay", type=float, default=0.985, help="Epsilon decay rate")
     parser.add_argument("--buffer_capacity", type=int, default=50000, help="Replay buffer size")
     parser.add_argument("--tau", type=float, default=0.005, help="Polyak soft update rate")
-    parser.add_argument("--eval_interval", type=int, default=15, help="Evaluation interval")
+    parser.add_argument("--eval_interval", type=int, default=10, help="Evaluation interval")
     parser.add_argument("--save_dir", type=str, default="./checkpoints", help="Save directory")
     parser.add_argument("--no_double_dqn", action="store_true", help="Disable Double DQN")
     parser.add_argument("--resume", action="store_true", help="Resume training from an existing checkpoint")

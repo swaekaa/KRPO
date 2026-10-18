@@ -93,12 +93,14 @@ def run_live_visualizer(checkpoint_path=None, max_laps=3):
         "COAST / NEUTRAL",
         "⚡ MILD LEFT + NITRO ⚡",
         "⚡ MILD RIGHT + NITRO ⚡",
+        "⚡ MICRO LEFT + NITRO ⚡",
+        "⚡ MICRO RIGHT + NITRO ⚡",
     ]
 
     action_colors = [
         "#3B82F6", "#60A5FA", "#10B981", "#EC4899",
         "#F87171", "#EF4444", "#06B6D4", "#9CA3AF",
-        "#F43F5E", "#D946EF",
+        "#F43F5E", "#D946EF", "#00E5FF", "#A855F7",
     ]
 
     step_count = 0
