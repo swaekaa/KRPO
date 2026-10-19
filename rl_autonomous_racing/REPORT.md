@@ -142,6 +142,20 @@ We evaluate the trained Dueling DDQN agent against two distinct baselines across
 3. **High-Speed Sweeper Carving:** The micro-steer nitro actions ($a_{10}, a_{11}$ @ $\pm 0.14$) allowed the agent to sustain **$240.0\text{ km/h}$** flat-out through sweeping coastal bends with optimal apex clipping.
 4. **Smart KERS Harvest:** Regenerative braking rapidly recovered kinetic energy on corner entry ($+0.52/\text{s}$), enabling full nitro acceleration on corner exit across >75% of the lap.
 
+### 5.3 Lap Time Progression Across Development Milestones
+
+The step-by-step optimization trajectory was tracked across five major architectural milestones:
+
+| Milestone / Architecture | Lap Time | Formatted | Avg Speed | Wall Contacts | Key Architectural Breakthrough |
+| :--- | :---: | :---: | :---: | :---: | :--- |
+| **M1: Baseline DDQN** | 104.50 s | 01:44.50 | 150.1 km/h | 20.0 | Baseline 8-action Dueling Double DQN network. |
+| **M2: Micro-Steer Kinematics** | 86.55 s | 01:26.54 | 186.4 km/h | 8.0 | Added 12 discrete actions with micro-steer ($\pm 0.14$) at $240\text{ km/h}$. |
+| **M3: LIDAR Repulsion** | 78.00 s | 01:18.00 | 201.2 km/h | 0.0 | 5-ray obstacle repulsion warning $<6\text{ m}$ completely eliminated barrier contacts. |
+| **M4: Greedy Apex Carving** | 75.85 s | 01:15.85 | 219.2 km/h | 0.0 | Zero-exploration greedy policy beat human benchmark ($76.00\text{ s}$) for first time. |
+| **M5: Aero Momentum & Extended Nitro** | **69.75 s** | **01:09.75** | **226.1 km/h** | 6.0 | Aerodynamic drag carryover ($220\text{--}240\text{ km/h}$) + 8.3s nitro tank. |
+
+![Lap Time Progression](lap_time_progression.png)
+
 ---
 
 ## 6. Ablation Studies

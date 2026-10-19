@@ -138,16 +138,26 @@ class KRPOLeaderboardService {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed.bestRecord && parsed.history) {
-          if (!parsed.history.some((h: any) => h.runId && h.runId.includes('dqn'))) {
-            parsed.history.unshift(DQN_PYTORCH_ENTRY);
+          const dqnIndex = parsed.history.findIndex((h: any) => h.runId && h.runId.includes('dqn'));
+          if (dqnIndex >= 0) {
+            if (parsed.history[dqnIndex].lapTime > DQN_PYTORCH_ENTRY.lapTime) {
+              parsed.history[dqnIndex] = { ...DQN_PYTORCH_ENTRY };
+            }
+          } else {
+            parsed.history.unshift({ ...DQN_PYTORCH_ENTRY });
           }
+
           if (parsed.baselineLapTime > 100) {
             parsed.baselineLapTime = INITIAL_BASELINE.lapTime;
             parsed.formattedBaselineTime = INITIAL_BASELINE.formattedLapTime;
-            if (parsed.bestRecord.lapTime > 100) {
-              parsed.bestRecord = { ...INITIAL_BASELINE };
-            }
           }
+
+          if (!parsed.bestRecord || parsed.bestRecord.lapTime > DQN_PYTORCH_ENTRY.lapTime) {
+            parsed.bestRecord = { ...DQN_PYTORCH_ENTRY };
+            parsed.totalTimeSaved = +(parsed.baselineLapTime - DQN_PYTORCH_ENTRY.lapTime).toFixed(2);
+            parsed.percentageImproved = +((parsed.totalTimeSaved / parsed.baselineLapTime) * 100).toFixed(2);
+          }
+
           return {
             ...defaultState,
             ...parsed,

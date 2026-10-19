@@ -72,8 +72,8 @@ function generateRealisticReplay(runType: RunTypeKey): ReplayDataset {
     isValid = false;
     invalidationReason = 'Track Boundary Violation (Barrier Contact in Sector 2 & 4)';
   } else if (runType === 'dqn') {
-    totalSimTime = 105.3;
-    topSpeedKmh = 183.9;
+    totalSimTime = 69.75;
+    topSpeedKmh = 240.0;
     collisionFrequency = 0;
     lineOffsetScale = 0.85;
     runId = 'dqn-eval-pytorch-best';
