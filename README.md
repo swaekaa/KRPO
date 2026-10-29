@@ -1,151 +1,163 @@
-# 🏎️ KRPO — KLUSTOR Racing Policy Optimizer
-> **Physics-Aware Trajectory & Driving Policy Optimization for the Vice Coast Circuit**
+# KRPO — Autonomous Racing Optimization and Reinforcement Learning
 
-**KRPO (KLUSTOR Racing Policy Optimizer)** is the dedicated trajectory optimization and driving policy engine built for **KLUSTOR // THE FIXER**. It consumes the authoritative 3.4 km 3D circuit geometry from KLUSTOR, formulates the kinematic vehicle limits, and solves for the optimal, fastest, and safest racing line using mathematical optimization and policy exploration.
+KRPO is a racing intelligence project for the Vice Coast Circuit that combines classic trajectory optimization with reinforcement learning. The repository contains both a mathematical policy optimizer for racing lines and a Python-based deep RL stack for autonomous driving, making it a full-stack project for high-speed vehicle control research and simulation.
 
-The generated racing line is loaded directly into KLUSTOR's Three.js environment, rendering a dynamic, speed-colored 3D racing ribbon with real-time apex clipping markers and braking zones.
-
----
-
-## 📐 1. Mathematical Formulation
-
-### Track Corridor Constraints
-The Vice Coast Circuit is defined by 29 authoritative waypoints interpolated via a closed Catmull-Rom spline sampled at $N = 500$ points.
-At each track point $i$:
-$$\mathbf{r}_i(w_i) = \mathbf{p}_i + w_i \hat{\mathbf{n}}_i$$
-where $\mathbf{p}_i$ is the track centerline, $\hat{\mathbf{n}}_i = (-\hat{\mathbf{t}}_z, 0, \hat{\mathbf{t}}_x)$ is the rightward normal vector, and $w_i \in [-w_{\text{max}}, w_{\text{max}}]$ is the signed lateral offset.
-
-Given track width $W = 12.0$m and car half-width $W_{\text{car}} = 1.1$m:
-$$|w_i| \le \frac{W}{2} - W_{\text{car}} = 4.9\text{ m}$$
-KRPO enforces an additional safety margin $\delta = 0.4$m, capping the optimal lateral offset at $w_{\text{max}} = 4.5$m to guarantee zero barrier collisions.
-
-### Kinematic Steering & Corner Speed Limits
-From `useCarPhysics.ts`, KLUSTOR models car steering as a bounded yaw rate:
-$$\omega = \frac{d\theta}{dt} \le \Omega_{\text{max}} = 2.0\text{ rad/s}$$
-
-Because angular turn rate relates to forward velocity $v$ and path curvature $\kappa = \frac{d\theta}{ds}$ by $\omega = v \cdot |\kappa|$, the car's speed through any turn is fundamentally constrained by:
-$$v_{\text{steer}}(\kappa) \le \frac{\Omega_{\text{max}}}{|\kappa|} = \frac{2.0}{|\kappa|}$$
-
-Additionally, lateral grip imposes a centripetal acceleration cap $a_{\text{lat}} \le 1.3g$:
-$$v_{\text{grip}}(\kappa) \le \sqrt{\frac{a_{\text{lat,max}}}{|\kappa|}}$$
-
-The maximum allowable entry speed at curvature $\kappa_i$ is therefore:
-$$v_{\text{cap}, i} = \min\left(V_{\text{top}}, \frac{2.0}{|\kappa_i| + \epsilon}, \sqrt{\frac{1.3g}{|\kappa_i| + \epsilon}}\right)$$
-
-### Forward-Backward Speed Profiling
-Using Pontryagin's maximum principle / dynamic programming along segment lengths $\Delta s_i = \|\mathbf{r}_{i+1} - \mathbf{r}_i\|$:
-1. **Backward Pass (Braking Limit):**
-   $$v_i \leftarrow \min\left(v_i, \sqrt{v_{i+1}^2 + 2(a_{\text{brake}} + a_{\text{friction}}) \Delta s_i}\right)$$
-2. **Forward Pass (Acceleration Limit):**
-   $$v_{i+1} \leftarrow \min\left(v_{i+1}, \sqrt{v_i^2 + 2 a_{\text{accel}} \Delta s_i}\right)$$
-3. **Simulated Lap Time Integration:**
-   $$T_{\text{lap}} = \sum_{i=0}^{N-1} \frac{2 \Delta s_i}{v_i + v_{i+1}}$$
+This project models a realistic racing problem as a constrained control task: the agent must navigate a technical circuit, manage speed through corners, use boost effectively, avoid barriers, and maximize lap progress while maintaining safety margins.
 
 ---
 
-## ⚡ 2. Optimization Workflow
+## Project goals
+
+- Build a robust autonomous driving agent for a closed-track racing environment.
+- Use reinforcement learning to learn decision policies from states, sensor cues, and reward shaping.
+- Combine RL with optimization-based trajectory logic and speed profiling.
+- Export replay data and performance profiles for benchmarking and visualization.
+- Provide a reusable codebase for simulation, evaluation, and policy study.
+
+---
+
+## Reinforcement learning focus
+
+The RL component in this repo is implemented under the Python project at [rl_autonomous_racing/README.md](rl_autonomous_racing/README.md) and is centered on a custom Gymnasium racing environment for the Vice Coast Circuit.
+
+### Environment and MDP
+
+The environment exposes a continuous observation vector built from:
+- normalized speed,
+- lateral displacement,
+- heading error relative to track tangent,
+- curvature previews ahead of the car,
+- synthetic 5-ray proximity sensors,
+- remaining boost reserve.
+
+The agent acts in a discrete 12-action control space that includes steering, throttle, braking, and nitro boost modes. The problem is modeled as an MDP where each action affects progress, safety, and reward accumulation as the car advances around the circuit.
+
+### Agent architecture
+
+The learning model uses a Dueling Double Deep Q-Network (Dueling DDQN):
+- a shared feature extractor,
+- a state-value stream,
+- an action-advantage stream,
+- target-network synchronization via Polyak averaging,
+- experience replay for stable training,
+- Huber loss for robust optimization.
+
+This design is well suited to racing because the agent must learn both the value of being in a good state and the benefit of choosing a specific maneuver in that state.
+
+### Reward design
+
+The reward function encourages:
+- forward progress,
+- sustainable high-speed driving,
+- boost usage when aligned with the track,
+- proper apex approach and racing-line behavior,
+- proactive collision avoidance,
+- reliable lap completion.
+
+It includes penalties for unnecessary braking, wall contact, and off-track deviation, which makes the policy learn aggressive but safe racing behavior.
+
+---
+
+## Repository structure
 
 ```text
-KLUSTOR (Authoritative Game)
-  ├── src/game/data/viceCoastCircuit.ts (29 waypoints, CatmullRom spline)
-  └── src/game/components/RacingLineOverlay.tsx (3D Visualizer & HUD Toggle)
-                    │
-           Track Geometry Export
-                    ▼
-KRPO (Optimization Engine in KLUSTOR/KRPO/)
-  ├── Track Extractor       -> Validates boundaries & Frenet frame
-  ├── Baseline Optimizer    -> Centerline reference (w = 0)
-  ├── Geometric MCP         -> Minimum Curvature Path (out-in-out apexes)
-  ├── Policy Optimizer      -> Trajectory search minimizing lap time
-  ├── Speed Profiler        -> Forward-backward dynamic programming
-  └── Lap Evaluator         -> Rigorous 6-point validity audit
-                    │
-           Profile Export (.json)
-                    ▼
-Loaded in KLUSTOR Scene at 60 FPS (Toggle with 'L')
+KRPO/
+├── README.md                         # Main project overview
+├── REPORT.md                        # Project-level report
+├── package.json                     # Node/TypeScript optimization project metadata
+├── src/                             # Trajectory optimization and simulation engine
+├── profiles/                        # Optimized and baseline racing profiles
+├── scripts/                         # Exporting and experiment helpers
+├── schemas/                         # JSON schema validation for track and profiles
+├── tests/                           # TypeScript validation tests
+├── docs/                            # Supplementary design and optimization docs
+├── experiments/                     # Experiment summaries and artifacts
+├── rl_autonomous_racing/            # Reinforcement learning subsystem
+│   ├── environment.py
+│   ├── dqn_agent.py
+│   ├── train.py
+│   ├── evaluate.py
+│   ├── export_replay.py
+│   ├── test_env.py
+│   ├── visualize_live.py
+│   ├── requirements.txt
+│   ├── checkpoints/
+│   ├── README.md
+│   └── REPORT.md
+└── ...
 ```
 
 ---
 
-## 📊 3. Performance Benchmark: Baseline vs. Optimized
+## Reinforcement learning workflow
 
-Measured on the **Vice Coast Circuit** ($3,380.2$ m):
+### 1. Install Python dependencies
 
-| Metric | Baseline (Centerline) | KRPO Optimized (MCP + Policy) | Delta / Gain |
-| :--- | :---: | :---: | :---: |
-| **Simulated Lap Time** | **178.45 s** (~2:58.45) | **165.62 s** (~2:45.62) | **-12.83 s** |
-| **Improvement** | *Reference (0.0%)* | **+7.19% faster** | 🚀 **Significant** |
-| **Average Speed** | $68.2$ km/h | $73.1$ km/h | $+4.9$ km/h |
-| **Top Speed** | $79.2$ km/h | $79.2$ km/h | Maintained |
-| **Trajectory Length** | $3,380.2$ m | $3,362.4$ m | $-17.8$ m |
-| **Apex Points Clipped** | 8 | 8 | Optimal apexes |
-| **Braking Zones** | 7 | 7 | Precision braking |
-| **Boundary Compliance** | 100% | 100% ($|w| \le 4.5$m) | Safe margin |
+```bash
+cd rl_autonomous_racing
+pip install -r requirements.txt
+```
 
----
+### 2. Validate the environment
 
-## 🎮 4. In-Game Controls & Features in KLUSTOR
+```bash
+python test_env.py
+```
 
-When racing on the 3D track in KLUSTOR:
-- **Toggle Racing Line:** Press **`L`** on your keyboard (or click the HUD pill).
-- **Speed-Colored Dynamic Ribbon:**
-  - 🔴 **Red:** Heavy braking zones (deceleration $> 2.5\text{ m/s}^2$).
-  - 🟡 **Yellow:** Transitional mid-corner coasting/steering zones.
-  - 🔵 **Cyan:** Maximum throttle acceleration zones.
-- **Apex Markers:** Neon cyan diamond indicators at corner apex clipping points.
-- **Braking Points:** Neon red deceleration bars ahead of corner entry.
-- **Controls Reference:** Displayed in the in-game HUD Controls Legend (`L : RACING LINE`).
+### 3. Train the model
 
----
+```bash
+python train.py --episodes 150 --batch_size 64 --lr 0.0005
+```
 
-## 📂 5. Repository Structure
+### 4. Evaluate the trained policy
 
-```text
-KLUSTOR/
-├── src/
-│   ├── game/
-│   │   ├── components/
-│   │   │   ├── RacingLineOverlay.tsx   # Three.js 3D visualizer
-│   │   │   └── RaceHUD.tsx             # In-game HUD toggle & indicator
-│   │   └── data/
-│   │       ├── krpoRacingLine.ts       # Integration service & runtime loader
-│   │       └── viceCoastCircuit.ts     # Authoritative circuit definition
-│   └── pages/
-│       └── RacePage.tsx                # Mounts overlay inside 3D Canvas
-└── KRPO/                               # Standalone Optimizer Repository
-    ├── package.json
-    ├── tsconfig.json
-    ├── schemas/
-    │   ├── krpo-track.schema.json      # Track geometry schema
-    │   └── krpo-profile.schema.json    # Racing line profile schema
-    ├── profiles/
-    │   ├── vice_coast_baseline_profile.json
-    │   └── vice_coast_optimized_profile.json
-    ├── scripts/
-    │   └── export_profiles.js          # Standalone Node profile exporter
-    ├── tests/
-    │   └── run_tests.ts                # Full test suite
-    └── src/
-        ├── index.ts
-        ├── types.ts                    # Shared interfaces
-        ├── track/
-        │   └── TrackExtractor.ts       # Track geometry extractor
-        ├── physics/
-        │   └── VehicleDynamics.ts      # Kinematic vehicle constraints
-        ├── profiler/
-        │   └── SpeedProfiler.ts        # Forward-backward solver
-        ├── optimizers/
-        │   ├── BaselineOptimizer.ts    # Centerline reference
-        │   ├── GeometricOptimizer.ts   # Minimum Curvature Path
-        │   └── PolicyOptimizer.ts      # Direct lap-time policy search
-        └── evaluation/
-            └── LapEvaluator.ts         # Automated profile audit
+```bash
+python evaluate.py --checkpoint checkpoints/best_dqn_policy.pt --trials 10
+```
+
+### 5. Export a replay for visualization
+
+```bash
+python export_replay.py --checkpoint checkpoints/best_dqn_policy.pt --output dqn_racing_replay.json
 ```
 
 ---
 
-## 🛡️ 6. Repository Boundaries & Git Safety
+## Optimization and policy engine
 
-- **Independent Histories:** Both `KLUSTOR` and `KRPO` maintain independent `.git` directories. Neither `.git` folder has been touched, overwritten, or reinitialized.
-- **No Staging Cross-Contamination:** KLUSTOR commits do not stage `KRPO/.git`.
-- **Zero Physics Intrusion:** The racing line visualizer is pure visual `BufferGeometry` with `depthWrite: false` and zero collision geometry, ensuring zero interference with vehicle physics, raycasting, or camera tracking.
+The TypeScript side of KRPO focuses on trajectory generation and performance optimization. It formalizes the circuit geometry, extracts track boundaries, evaluates corner limits, and generates track-consistent profiles for racing.
+
+The system includes:
+- track extraction and corridor validation,
+- baseline centerline generation,
+- geometric path optimization,
+- policy-based trajectory search,
+- speed profiling and braking analysis,
+- lap-time evaluation and export.
+
+This makes KRPO a hybrid system: the optimization engine finds feasible motion plans, while the RL agent learns tactical control behavior inside the physical simulation.
+
+---
+
+## Performance summary
+
+The RL stack is designed around high-speed autonomous racing. In the documented experiments, the Dueling DDQN agent demonstrates strong lap completion and speed retention relative to random and heuristic baselines, and it has been benchmarked in a sub-70-second racing scenario. The exact figures are summarized in the report documentation and the RL project report under [rl_autonomous_racing/REPORT.md](rl_autonomous_racing/REPORT.md).
+
+---
+
+## Documentation
+
+- [rl_autonomous_racing/README.md](rl_autonomous_racing/README.md) — RL quick-start and environment usage guide
+- [rl_autonomous_racing/REPORT.md](rl_autonomous_racing/REPORT.md) — detailed RL report
+- [docs/INSPECTION_AND_ARCHITECTURE.md](docs/INSPECTION_AND_ARCHITECTURE.md) — architecture and implementation notes
+- [docs/AUTONOMOUS_OPTIMIZATION_AND_REPLAY.md](docs/AUTONOMOUS_OPTIMIZATION_AND_REPLAY.md) — optimization and replay workflow
+- [docs/KRPO_OPTIMIZATION_AND_LEADERBOARD_REPORT.md](docs/KRPO_OPTIMIZATION_AND_LEADERBOARD_REPORT.md) — optimization benchmarking and leaderboard notes
+
+---
+
+## Conclusion
+
+KRPO is best understood as a complete autonomous racing platform: a trajectory optimizer for physically valid motion, a reinforcement learning environment for decision-making, and an evaluation framework for benchmarking policy quality. Together, these layers allow the project to explore both mathematically structured racing strategies and data-driven learning.
+
+For the full reinforcement learning write-up, see [REPORT.md](REPORT.md).
